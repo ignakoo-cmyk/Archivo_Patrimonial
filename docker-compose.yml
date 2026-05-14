@@ -1,0 +1,115 @@
+# ============================================
+# UAH Archive Chatbot — Docker Compose
+# ============================================
+
+services:
+  # --- Infraestructura ---
+  redis:
+    image: redis:7-alpine
+    container_name: uah_redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - uah_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: uah_chroma
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - uah_chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=FALSE
+
+  # --- Microservicios ---
+  gateway:
+    build:
+      context: ./backend/gateway
+      dockerfile: Dockerfile
+    container_name: uah_gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - CHAT_SERVICE_URL=http://chat-service:3001
+      - SEARCH_SERVICE_URL=http://search-service:3002
+      - ATOM_SERVICE_URL=http://atom-integration:3003
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  chat-service:
+    build:
+      context: ./backend/services/chat-service
+      dockerfile: Dockerfile
+    container_name: uah_chat_service
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SEARCH_SERVICE_URL=http://search-service:3002
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  search-service:
+    build:
+      context: ./backend/services/search-service
+      dockerfile: Dockerfile
+    container_name: uah_search_service
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - ATOM_SERVICE_URL=http://atom-integration:3003
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+
+  atom-integration:
+    build:
+      context: ./backend/services/atom-integration-service
+      dockerfile: Dockerfile
+    container_name: uah_atom_integration
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      - ATOM_BASE_URL=${ATOM_BASE_URL:-http://host.docker.internal:8081}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # --- Frontend ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: uah_frontend
+    restart: unless-stopped
+    ports:
+      - "8090:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+
+volumes:
+  uah_redis_data:
+  uah_chroma_data:

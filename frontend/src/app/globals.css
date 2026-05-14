@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+:root {
+  --uah-black: #000000;
+  --uah-orange: #f37021;
+  --uah-orange-hover: #ff8533;
+  --uah-gray-bg: #f8f8f8;
+  --uah-text-main: #333333;
+  --uah-border: #e2e2e2;
+}
+
+@theme inline {
+  --font-sans: "Roboto", "Inter", system-ui, sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+}
+
+body {
+  background-color: white;
+  color: var(--uah-text-main);
+  margin: 0;
+  padding: 0;
+}
+
+/* Cabecera idéntica al sitio UAH */
+.uah-official-header {
+  background-color: var(--uah-black);
+  color: white;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  padding: 0 10%;
+  border-bottom: 4px solid var(--uah-orange);
+}
+
+/* Área de búsqueda con fondo de manuscrito */
+.uah-hero-section {
+  background-image: linear-gradient(rgba(255,255,255,0.85), rgba(255,255,255,0.85)), url('https://archivopatrimonial.uahurtado.cl/themes/uah/images/bg-search.jpg');
+  background-size: cover;
+  background-position: center;
+  padding: 40px 0;
+  border-bottom: 1px solid var(--uah-border);
+}
+
+/* El botón naranja característico del sitio */
+.btn-uah-official {
+  background-color: var(--uah-orange);
+  color: white;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 0 30px;
+  height: 50px;
+  border-radius: 0 4px 4px 0;
+  transition: background 0.2s;
+}
+
+.btn-uah-official:hover {
+  background-color: var(--uah-orange-hover);
+}
+
+/* Input de búsqueda estilo UAH */
+.uah-input-search {
+  height: 50px;
+  border: 1px solid #ccc;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+  padding: 0 20px;
+  font-size: 16px;
+  width: 100%;
+}
+
+/* Contenedor de chat limpio */
+.chat-container-clean {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.bubble-ai {
+  background-color: white;
+  border: 1px solid var(--uah-border);
+  padding: 20px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+}
+
+.bubble-user {
+  background-color: #f1f1f1;
+  padding: 15px 25px;
+  border-radius: 20px;
+  margin-bottom: 20px;
+  align-self: flex-end;
+  max-width: 80%;
+  font-weight: 500;
+}
+
+/* Estilo de los resultados de documentos */
+.uah-doc-result {
+  border: 1px solid var(--uah-border);
+  padding: 20px;
+  margin-top: 15px;
+  border-radius: 4px;
+  transition: border 0.3s;
+}
+
+.uah-doc-result:hover {
+  border-color: var(--uah-orange);
+}
+
+.uah-doc-title {
+  color: var(--uah-orange);
+  font-family: var(--font-serif);
+  font-size: 1.2rem;
+  font-weight: bold;
+  margin-bottom: 10px;
+  display: block;
+}
