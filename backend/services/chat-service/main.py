@@ -1,42 +1,72 @@
 """
-Chat Service — Main Entry Point
-=================================
-Microservicio que maneja la lógica conversacional, memoria y RAG
-con Gemini y el Search Service.
-Puerto: 3001
+Chat Service — Entry Point (Composition Root)
+=============================================
+Único punto de ensamblado de la aplicación. Aquí se instancian los
+adaptadores concretos y se construye el grafo de dependencias completo.
+
+Decisiones de infraestructura tomadas aquí:
+  - LLM: GeminiAdapter (cambiar por OpenAIAdapter sin tocar el dominio).
+  - Búsqueda: SearchServiceHttpAdapter (cambiar por mock en tests).
 """
 
 import os
 from contextlib import asynccontextmanager
+
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai
+
+# ── Adaptadores de Infraestructura ────────────────────────────────────────────
+from adapters.inbound.http_controller import router as router_chat
+from adapters.outbound.gemini_adapter import GeminiAdapter
+from adapters.outbound.search_service_adapter import SearchServiceHttpAdapter
+
+# ── Dominio (código puro) ─────────────────────────────────────────────────────
+from domain.chat_context.services import ChatOrchestratorService
+from domain.chat_context.models import SesionChat
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🤖 Chat Service iniciando...")
-    app.state.http_client = httpx.AsyncClient(timeout=30.0)
-    
-    # Configure Gemini
-    api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
-        genai.configure(api_key=api_key)
-        app.state.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ [ChatService] Gemini API configurada.")
-    else:
-        app.state.gemini_model = None
-        print("⚠️ [ChatService] GEMINI_API_KEY no encontrada. Funcionando en modo Mock.")
-        
-    print("🚀 Chat Service listo en puerto 3001")
-    yield
-    await app.state.http_client.aclose()
-    print("👋 Chat Service cerrado")
+    """Composition Root: ensambla todos los adaptadores y el servicio de dominio."""
+    print("🤖 [chat-service] Iniciando composición de dependencias...")
 
+    # ── 1. Infraestructura compartida ─────────────────────────────────────────
+    cliente_http = httpx.AsyncClient(timeout=30.0)
+
+    # ── 2. Adaptadores de Salida ──────────────────────────────────────────────
+    gemini = GeminiAdapter(api_key=os.getenv("GEMINI_API_KEY", ""))
+
+    busqueda = SearchServiceHttpAdapter(
+        base_url=os.getenv("SEARCH_SERVICE_URL", "http://search-service:3002"),
+        cliente_http=cliente_http,
+    )
+
+    # ── 3. Servicio de Dominio ensamblado ─────────────────────────────────────
+    app.state.orquestador = ChatOrchestratorService(
+        modelo_lenguaje=gemini,
+        servicio_busqueda=busqueda,
+    )
+
+    # ── 4. Almacén de sesiones en memoria (simple; usar Redis en producción) ──
+    app.state.sesiones: dict[str, SesionChat] = {}
+    app.state.cliente_http = cliente_http
+
+    print("✅ [chat-service] Listo en puerto 3001.")
+    yield
+
+    await cliente_http.aclose()
+    print("👋 [chat-service] Cerrado.")
+
+
+# ── Configuración FastAPI ─────────────────────────────────────────────────────
 app = FastAPI(
-    title="UAH Archivo Chatbot — Chat Service",
-    description="Servicio de IA conversacional",
-    version="1.0.0",
+    title="UAH Archivo Patrimonial — Chat Service",
+    description=(
+        "Asistente conversacional con RAG sobre el Archivo Patrimonial UAH. "
+        "Arquitectura Hexagonal + DDD con Bounded Contexts (Chat y Search)."
+    ),
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -47,78 +77,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/health")
+# ── Adaptadores de Entrada (Routers) ─────────────────────────────────────────
+app.include_router(router_chat)
+
+
+@app.get("/health", tags=["Infraestructura"])
 async def health():
     return {
-        "service": "chat-service",
-        "status": "healthy",
-        "llm": "gemini" if os.getenv("GEMINI_API_KEY") else "none"
+        "servicio": "chat-service",
+        "estado": "saludable",
+        "version": "3.0.0",
+        "arquitectura": "hexagonal-ddd-bounded-contexts",
+        "llm": "gemini-2.5-flash" if os.getenv("GEMINI_API_KEY") else "sin-llm",
     }
 
-def _build_system_prompt(docs, query):
-    """Construye el prompt RAG para el asistente del archivo patrimonial"""
-    context = ""
-    for idx, d in enumerate(docs):
-        context += f"\\n--- DOCUMENTO {idx+1} ---\\nTítulo: {d['title']}\\nDescripción: {d['description']}\\nURL: {d['href']}\\n"
-        
-    return f"""Eres el Asistente Experto del Archivo Patrimonial de la Universidad Alberto Hurtado.
-Tu objetivo es ayudar a los usuarios a encontrar información en el archivo de manera amable, erudita y precisa.
-
-REGLAS STRICTAS:
-1. Responde SIEMPRE en español.
-2. Si el usuario hace una pregunta general ("Hola", "¿Cómo estás?"), responde amablemente y ofrece tu ayuda para buscar en el archivo. No inventes documentos.
-3. Si el usuario busca algo, utiliza ÚNICAMENTE el contexto de los documentos proporcionados abajo para responder.
-4. NUNCA inventes información que no esté en los documentos proporcionados.
-5. Si los documentos proporcionados no responden a la pregunta, dile al usuario amablemente que no encontraste información exacta sobre eso en el archivo.
-
-CONTEXTO DEL ARCHIVO PATRIMONIAL ENCONTRADO PARA LA BÚSQUEDA "{query}":
-{context}
-
-PREGUNTA DEL USUARIO:
-{query}
-"""
-
-@app.post("/api/v1/chat/message")
-async def send_message(request: Request):
-    """
-    Recibe un mensaje del usuario, realiza RAG consultando al Search Service,
-    y devuelve una respuesta usando Gemini.
-    """
-    data = await request.json()
-    query = data.get("message", "")
-    client: httpx.AsyncClient = request.app.state.http_client
-    model = request.app.state.gemini_model
-    
-    # 1. Consultar al Search Service
-    search_url = os.getenv("SEARCH_SERVICE_URL", "http://search-service:3002")
-    docs = []
-    try:
-        search_res = await client.get(f"{search_url}/api/v1/search/query", params={"q": query, "limit": 4})
-        if search_res.status_code == 200:
-            search_data = search_res.json()
-            docs = search_data.get("results", [])
-    except Exception as e:
-        print(f"❌ Error consultando Search Service: {e}")
-
-    # 2. Generar respuesta con Gemini
-    if model:
-        try:
-            prompt = _build_system_prompt(docs, query)
-            response = await model.generate_content_async(prompt)
-            ai_response = response.text
-        except Exception as e:
-            print(f"❌ Error llamando a Gemini: {e}")
-            ai_response = "Lo siento, hubo un error de conexión con la IA. Por favor, intenta de nuevo."
-    else:
-        doc_titles = ", ".join([d['title'] for d in docs])
-        ai_response = f"[Mock Mode] He encontrado estos documentos: {doc_titles}. Configura GEMINI_API_KEY para respuestas reales."
-
-    return {
-        "success": True,
-        "response": ai_response,
-        "documents": docs,
-        "conversation_id": data.get("conversation_id", "default")
-    }
 
 if __name__ == "__main__":
     import uvicorn
