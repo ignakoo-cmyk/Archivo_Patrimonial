@@ -17,13 +17,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── Adaptadores de Infraestructura ────────────────────────────────────────────
-from adapters.inbound.http_controller import router as router_chat
-from adapters.outbound.gemini_adapter import GeminiAdapter
-from adapters.outbound.search_service_adapter import SearchServiceHttpAdapter
+from Presentacion.controladores.http_controlador_chat import router as router_chat
+from Infraestructura.adaptadores_salida.gemini_adaptador import GeminiAdapter
+from Infraestructura.adaptadores_salida.servicio_busqueda_adaptador import SearchServiceHttpAdapter
 
 # ── Dominio (código puro) ─────────────────────────────────────────────────────
-from domain.chat_context.services import ChatOrchestratorService
-from domain.chat_context.models import SesionChat
+from Dominio.servicios.orquestador_chat import ChatOrchestratorService
+from Dominio.entidades.sesion_chat import SesionChat
 
 
 @asynccontextmanager

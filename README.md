@@ -4,7 +4,13 @@ Este proyecto implementa una plataforma de búsqueda inteligente y un chatbot co
 
 ## 🧠 Arquitectura y Flujo de la Información (Bajo el Capó)
 
-El sistema está diseñado utilizando una arquitectura de microservicios. A continuación, se detalla el flujo de información paso a paso desde que un usuario realiza una consulta:
+El sistema está diseñado utilizando una arquitectura de microservicios. Cada microservicio backend (Python) está estructurado utilizando una **Arquitectura Hexagonal (Puertos y Adaptadores) combinada con Arquitectura en Capas**, organizada íntegramente en español para mantener un lenguaje ubicuo claro:
+- **Dominio**: El núcleo puro. Contiene Entidades, Objetos de Valor, Puertos (interfaces) y Servicios de Dominio. Sin dependencias externas.
+- **Aplicacion**: Orquestación y Casos de Uso. Contiene DTOs y puertos de entrada.
+- **Infraestructura**: Adaptadores concretos que hablan con el mundo exterior (ChromaDB, Gemini, APIs, JSONs locales).
+- **Presentacion**: Controladores HTTP (FastAPI routers).
+
+A continuación, se detalla el flujo de información paso a paso desde que un usuario realiza una consulta:
 
 ### 1. Interacción del Usuario (Frontend)
 El usuario ingresa su consulta a través de la interfaz web desarrollada en **Next.js**. Esta solicitud se envía al **API Gateway**.

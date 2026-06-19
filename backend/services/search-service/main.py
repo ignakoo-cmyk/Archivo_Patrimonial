@@ -20,14 +20,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── Adaptadores de Infraestructura (código que depende de librerías) ──────────
-from adapters.salida.chromadb_adapter import ChromaDBAdapter
-from adapters.salida.tfidf_adapter import TFIDFAdapter
-from adapters.salida.static_json_adapter import StaticJsonRepositoryAdapter
-from adapters.entrada.http_controller import router as router_busqueda
+from Infraestructura.adaptadores_salida.chromadb_adaptador import ChromaDBAdapter
+from Infraestructura.adaptadores_salida.tfidf_adaptador import TFIDFAdapter
+from Infraestructura.adaptadores_salida.json_estatico_adaptador import StaticJsonRepositoryAdapter
+from Presentacion.controladores.http_controlador_busqueda import router as router_busqueda
 
 # ── Capa de Aplicación y Dominio (código puro) ───────────────────────────────
-from application.casos_de_uso.buscar_contenido import BuscarContenidoService
-from domain.search_context.services import GestorBusqueda
+from Aplicacion.casos_de_uso.buscar_contenido import BuscarContenidoService
+from Dominio.servicios.gestor_busqueda import GestorBusqueda
 
 
 @asynccontextmanager
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
 
     # ── 1. Instanciar Adaptadores de Salida ───────────────────────────────────
     repositorio = StaticJsonRepositoryAdapter(
-        ruta_json=os.getenv("DATA_PATH", "data/clean_with_metadata.json")
+        ruta_json=os.getenv("DATA_PATH", "Infraestructura/datos/clean_with_metadata.json")
     )
 
     chroma_adapter = ChromaDBAdapter(
