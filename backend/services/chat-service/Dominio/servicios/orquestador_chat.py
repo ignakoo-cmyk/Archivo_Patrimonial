@@ -129,36 +129,41 @@ class ChatOrchestratorService:
                 consulta=texto_usuario, limite=8
             )
 
-        # ── INTERCEPCIÓN BÚSQUEDA FACETADA CONVERSACIONAL ──
-        # Si el search-service devolvió facetas, significa que la búsqueda era
-        # demasiado amplia (>20 docs) y se activó el pre-filtrado por metadatos.
-        if facetas and (facetas.get("materias") or facetas.get("lugares")):
-            sugerencias = []
+        # ── EXTRACCIÓN DE SUGERENCIAS FACETADAS ──
+        # Si la búsqueda retornó facetas (indicando que hay muchos resultados), preparamos sugerencias.
+        sugerencias_facetas = []
+        if total_corpus > 3:
+            for cat in facetas.get("categorias", []):
+                sugerencias_facetas.append({
+                    "label": cat.capitalize(),
+                    "value": f"{texto_usuario} {cat}"
+                })
+
+            for anio in facetas.get("años", []):
+                sugerencias_facetas.append({
+                    "label": f"Año {anio}",
+                    "value": f"{texto_usuario} en {anio}"
+                })
 
             for materia in facetas.get("materias", []):
-                sugerencias.append({
+                sugerencias_facetas.append({
                     "label": materia.capitalize(),
                     "value": f"{texto_usuario} {materia}"
                 })
 
             for lugar in facetas.get("lugares", []):
-                sugerencias.append({
+                sugerencias_facetas.append({
                     "label": lugar.capitalize(),
                     "value": f"{texto_usuario} {lugar}"
                 })
-
-            respuesta_intercep = (
-                f"He encontrado **{total_corpus}** documentos relacionados con tu búsqueda. "
-                f"Para ser más preciso y darte mejores resultados, ¿te interesa explorar "
-                f"alguna de estas categorías específicas?"
-            )
-
-            sesion.agregar_mensaje(RolMensaje.ASISTENTE, respuesta_intercep)
-            return respuesta_intercep, documentos_contexto, sugerencias[:5]
         # ───────────────────────────────────────────────────
 
         # Paso 4: Construir prompt
-        prompt = self.construir_prompt_contextualizado(texto_usuario, documentos_contexto)
+        prompt = self.construir_prompt_contextualizado(
+            texto_usuario, documentos_contexto,
+            total_corpus=total_corpus,
+            facetas=facetas,
+        )
 
         # Paso 5: Llamar al LLM
         if self.modelo_lenguaje.esta_disponible():
@@ -184,6 +189,10 @@ class ChatOrchestratorService:
                     if sug_texto:
                         sugerencias.append({"label": sug_texto, "value": sug_texto})
             sugerencias = sugerencias[:3]
+
+        # Sobrescribir con las facetas de búsqueda exactas si hay muchos resultados
+        if sugerencias_facetas:
+            sugerencias = sugerencias_facetas[:5]
 
         # Paso 8: Ensamblar con citas obligatorias
         respuesta_final = self.ensamblar_respuesta_con_citas(
@@ -317,7 +326,7 @@ class ChatOrchestratorService:
         if urls_ya_citadas:
             return respuesta
 
-        lineas_citas = ["\n\n---\n**📚 Fuentes del Archivo Patrimonial UAH:**\n"]
+        lineas_citas = ["\n\n---\n**Fuentes del Archivo Patrimonial UAH:**\n"]
         for i, doc in enumerate(documentos_con_url, start=1):
             anio_str = f" ({doc.anio})" if doc.anio else ""
             lineas_citas.append(
@@ -327,17 +336,24 @@ class ChatOrchestratorService:
         return respuesta + "\n".join(lineas_citas)
 
     def construir_prompt_contextualizado(
-        self, consulta: str, documentos: list[DocumentoPatrimonial]
+        self,
+        consulta: str,
+        documentos: list[DocumentoPatrimonial],
+        total_corpus: int = 0,
+        facetas: dict[str, list[str]] | None = None,
     ) -> PromptContextualizado:
         """
         Construye el PromptContextualizado inyectando el contexto RAG.
 
-        Delega el ensamblado del texto final al PromptTemplate inyectado,
-        manteniendo el dominio desacoplado del contenido específico del prompt.
+        Incluye el total del corpus y las facetas disponibles para que el LLM
+        pueda aplicar paginación cognitiva (informar cuántos documentos más
+        existen y sugerir categorías de refinamiento cuando no hay resultados).
 
         Args:
-            consulta:    Texto original del usuario.
-            documentos:  Documentos recuperados del archivo para contexto.
+            consulta:      Texto original del usuario.
+            documentos:    Documentos recuperados del archivo para contexto.
+            total_corpus:  Total de documentos encontrados (antes del límite de retorno).
+            facetas:       Categorías, materias, lugares y años presentes en los resultados.
 
         Returns:
             PromptContextualizado listo para ser enviado al ModeloLenguajePort.
@@ -348,16 +364,37 @@ class ChatOrchestratorService:
                 f"{doc.resumen_para_prompt}"
                 for i, doc in enumerate(documentos, start=1)
             ]
+            # Informar al LLM cuántos documentos existen en total (paginación cognitiva)
+            docs_adicionales = total_corpus - len(documentos) if total_corpus > len(documentos) else 0
+            nota_paginacion = (
+                f"\n[NOTA PARA EL ASISTENTE: Se presentan {len(documentos)} de un total de "
+                f"{total_corpus} documentos recuperados. Informa al usuario que hay "
+                f"{docs_adicionales} documentos más disponibles si es relevante para su investigación.]\n"
+            ) if docs_adicionales > 0 else ""
+
             bloque_contexto = (
                 f"\n\n═══ CONTEXTO: DOCUMENTOS DEL ARCHIVO PATRIMONIAL ═══\n"
                 f"Búsqueda realizada: \"{consulta}\"\n"
-                f"Documentos encontrados: {len(documentos)}\n\n"
+                f"Documentos en este contexto: {len(documentos)} de {total_corpus} encontrados.\n"
+                f"{nota_paginacion}\n"
                 + "\n\n".join(partes_contexto)
             )
         else:
+            # Sin documentos: dar pistas de categorías disponibles al LLM
+            sugerencias_cat = ""
+            if facetas:
+                cats = facetas.get("categorias", [])
+                mats = facetas.get("materias", [])
+                if cats or mats:
+                    items = cats[:3] + mats[:3]
+                    sugerencias_cat = (
+                        "\nSin embargo, el archivo cuenta con documentos en las siguientes "
+                        "categorías cercanas: " + ", ".join(f'"{c}"' for c in items[:5]) + "."
+                    )
             bloque_contexto = (
                 "\n\n═══ CONTEXTO ═══\n"
                 "No se encontraron documentos relevantes en el archivo para esta consulta."
+                f"{sugerencias_cat}"
             )
 
         texto_completo = self.prompt_template.construir_prompt_completo(

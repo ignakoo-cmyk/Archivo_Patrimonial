@@ -52,30 +52,6 @@ class GestorBusqueda:
             
         total_corpus = len(corpus_busqueda)
         
-        # ── Paso 0.5: Extracción Dinámica de Facetas (Conversacional) ─────────
-        # Si el resultado es muy amplio y el usuario NO ha filtrado aún por materia,
-        # extraemos el Top 3 materias y Top 2 lugares para sugerencias.
-        facetas: dict[str, list[str]] = {"materias": [], "lugares": []}
-        
-        # Solo extraemos facetas si el pre-filtro redujo el corpus y quedaron > 20 docs.
-        # Omitimos extraer si la consulta ya contiene una materia (para evitar loops infinitos).
-        tiene_materia = consulta.filtro_nlp and consulta.filtro_nlp.materias
-        if total_corpus > 20 and total_corpus < len(todos) and not tiene_materia:
-            ctr_materias = Counter()
-            ctr_lugares = Counter()
-            
-            for doc in corpus_busqueda:
-                if doc.materias:
-                    # Dividimos por el separador " | " que usamos en el adaptador JSON
-                    for m in doc.materias.split(" | "):
-                        if m.strip():
-                            ctr_materias[m.strip()] += 1
-                if doc.lugar:
-                    ctr_lugares[doc.lugar.strip()] += 1
-                    
-            facetas["materias"] = [m for m, _ in ctr_materias.most_common(3)]
-            facetas["lugares"] = [l for l, _ in ctr_lugares.most_common(2)]
-
         # ── Paso 1: Ejecutar estrategias sobre el corpus acotado ──────────────
         exactos = self._buscar_exacto(consulta.texto_normalizado, corpus_busqueda)
 
@@ -102,6 +78,39 @@ class GestorBusqueda:
         self._aplicar_rrf(lexicos,    _PESO_LEXICO,    tabla_rrf)
 
         ids_ordenados = sorted(tabla_rrf.items(), key=lambda p: p[1], reverse=True)
+
+        # ── Paso 3: Extracción Dinámica de Facetas de los Top Resultados ──────
+        facetas: dict[str, list[str]] = {"materias": [], "lugares": [], "categorias": [], "años": []}
+        
+        # Si la consulta produjo varios resultados, analizamos los Top 50 para extraer facetas relevantes
+        if len(ids_ordenados) > 5:
+            ctr_materias = Counter()
+            ctr_lugares = Counter()
+            ctr_categorias = Counter()
+            ctr_anios = Counter()
+            
+            top_ids_facetas = ids_ordenados[:50]
+            for id_doc, _ in top_ids_facetas:
+                doc = await self.repositorio.obtener_por_id(id_doc)
+                if doc:
+                    if doc.materias:
+                        for m in doc.materias.split(" | "):
+                            if m.strip(): ctr_materias[m.strip()] += 1
+                    if doc.lugar:
+                        ctr_lugares[doc.lugar.strip()] += 1
+                    if doc.categorias:
+                        for c in doc.categorias.split(" | "):
+                            if c.strip(): ctr_categorias[c.strip()] += 1
+                    if doc.anio:
+                        ctr_anios[doc.anio.strip()] += 1
+                        
+            # Omitir sugerir materia si ya se filtró por una en NLP
+            tiene_materia = consulta.filtro_nlp and consulta.filtro_nlp.materias
+            if not tiene_materia:
+                facetas["materias"] = [m for m, _ in ctr_materias.most_common(3)]
+            facetas["lugares"] = [l for l, _ in ctr_lugares.most_common(2)]
+            facetas["categorias"] = [c for c, _ in ctr_categorias.most_common(3)]
+            facetas["años"] = [a for a, _ in ctr_anios.most_common(3)]
 
         resultados: list[ResultadoBusqueda] = []
         for id_doc, puntuacion in ids_ordenados[: consulta.limite]:

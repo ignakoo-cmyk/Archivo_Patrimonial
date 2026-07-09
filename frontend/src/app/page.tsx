@@ -1,9 +1,37 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Search, ExternalLink, Landmark, User, Loader2, BookOpen, Library, MessageCircle, X, ChevronRight, FileText, Clock, Sparkles, AlertCircle, WifiOff, Bot } from "lucide-react";
+import { Loader2, Send, Bot, Sparkles, FileText, ChevronRight, ExternalLink, Search, Landmark, User, BookOpen, Library, MessageCircle, X, Clock, AlertCircle, WifiOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import QuickExplorationMenu, { ExplorationData } from "../components/QuickExplorationMenu";
+
+const exploreData: ExplorationData = {
+  materias: [
+    { name: "Derechos Humanos", count: 87 },
+    { name: "Dictadura (Chile)", count: 42 },
+    { name: "Educación (Chile)", count: 53 },
+    { name: "Economía", count: 148 },
+    { name: "Leyes (Chile)", count: 35 },
+    { name: "Prensa", count: 63 },
+    { name: "Plebiscito (Chile)", count: 59 },
+    { name: "Partidos políticos (Chile)", count: 34 },
+    { name: "Detenidos desaparecidos", count: 14 }
+  ],
+  personajes: [
+    { name: "Aylwin Azócar, Patricio", count: 307 },
+    { name: "Correa Opazo, Pedro", count: 227 },
+    { name: "Foxley, Alejandro", count: 133 },
+    { name: "Bascuñán Edwards, Carlos", count: 126 },
+    { name: "Lagos Escobar, Ricardo", count: 48 }
+  ],
+  ciudades: [
+    { name: "Temuco (Chile)", count: 44 },
+    { name: "Santiago (Chile)", count: 120 },
+    { name: "Valparaíso (Chile)", count: 30 },
+    { name: "Concepción (Chile)", count: 25 }
+  ]
+};
 
 // Interfaces actualizadas para coincidir con el contrato definido en types/archive.ts
 interface RichCard {
@@ -171,13 +199,7 @@ export default function ArchivePage() {
         <header className="uah-header">
           <div className="uah-header-inner">
             <div className="uah-logo-group">
-              <div className="uah-logo-circle">
-                <span>UAH</span>
-              </div>
-              <div className="uah-logo-text">
-                <span className="uah-logo-title">Universidad Alberto Hurtado</span>
-                <span className="uah-logo-subtitle">Archivo Patrimonial</span>
-              </div>
+              <img src="/uah-logo.png" alt="UAH Logo" className="h-14 w-auto object-contain drop-shadow-md" />
             </div>
             <nav className="uah-nav">
               <a href="https://archivopatrimonial.uahurtado.cl/" target="_blank">Quienes Somos</a>
@@ -287,8 +309,8 @@ export default function ArchivePage() {
         <div className="bg-gradient-to-r from-[#002855] to-[#003b7a] text-white p-5 flex items-center justify-between shrink-0 shadow-sm relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-full bg-white/5 opacity-50 blur-[2px]" />
           <div className="flex items-center gap-3 relative z-10">
-            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/20 backdrop-blur-md shadow-inner">
-              <span className="text-white text-[10px] font-bold tracking-widest uppercase">UAH</span>
+            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/20 backdrop-blur-md shadow-inner overflow-hidden">
+              <img src="/robot-avatar.png" alt="Asistente IA" className="w-full h-full object-cover" />
             </div>
             <div>
               <h3 className="text-sm font-semibold tracking-wide">Asistente IA</h3>
@@ -315,8 +337,8 @@ export default function ArchivePage() {
                 </div>
               ) : (
                 <div className="flex items-start gap-3 w-full">
-                  <div className="w-8 h-8 rounded-full bg-[#003366] flex items-center justify-center text-white text-[9px] font-bold tracking-widest shrink-0 shadow-md">
-                    UAH
+                  <div className="w-8 h-8 rounded-full bg-[#003366] flex items-center justify-center text-white text-[9px] font-bold tracking-widest shrink-0 shadow-md overflow-hidden">
+                    <img src="/robot-avatar.png" alt="Bot" className="w-full h-full object-cover" />
                   </div>
                   
                   {msg.isError ? (
@@ -336,7 +358,14 @@ export default function ArchivePage() {
                         </div>
                       ) : (
                         <div className="chat-prose text-gray-700">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          <ReactMarkdown 
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" className="text-[#f37021] hover:underline" />
+                            }}
+                          >
+                            {msg.content}
+                          </ReactMarkdown>
                         </div>
                       )}
 
@@ -419,8 +448,16 @@ export default function ArchivePage() {
         </div>
 
         {/* Chat Input */}
-        <div className="p-4 bg-white/80 backdrop-blur-md border-t border-gray-100 shrink-0 shadow-[0_-10px_20px_rgba(0,0,0,0.02)]">
-          <form onSubmit={handleChatSubmit} className="flex items-center gap-2 bg-gray-50/80 border border-gray-200/80 rounded-2xl p-1.5 focus-within:bg-white focus-within:border-[#f37021]/50 focus-within:ring-4 focus-within:ring-[#f37021]/10 transition-all duration-300 shadow-inner">
+        <div className="p-4 bg-white/80 backdrop-blur-md border-t border-gray-100 shrink-0 shadow-[0_-10px_20px_rgba(0,0,0,0.02)] relative">
+          <QuickExplorationMenu 
+            data={exploreData} 
+            onSelect={(term) => {
+              if (!isTyping) {
+                sendMessage(term);
+              }
+            }} 
+          />
+          <form onSubmit={handleChatSubmit} className="flex items-center gap-2 bg-gray-50/80 border border-gray-200/80 rounded-2xl p-1.5 focus-within:bg-white focus-within:border-[#f37021]/50 focus-within:ring-4 focus-within:ring-[#f37021]/10 transition-all duration-300 shadow-inner mt-2">
             <input
               ref={chatInputRef}
               type="text"

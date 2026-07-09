@@ -547,25 +547,29 @@ body {
 /* Prose in chat */
 .chat-prose {
   color: var(--uah-text);
+  font-family: 'Playfair Display', serif;
+  font-size: 14.5px;
+  line-height: 1.6;
 }
 
-.chat-prose p { margin: 0 0 8px; }
+.chat-prose p { margin: 0 0 10px; }
 .chat-prose p:last-child { margin: 0; }
-.chat-prose strong { color: var(--uah-text); }
+.chat-prose strong { color: var(--uah-black); font-weight: 700; }
 .chat-prose h3 {
+  font-family: 'Inter', sans-serif;
   font-size: 14px;
   margin: 0 0 6px;
   color: var(--uah-text);
 }
 
 .chat-prose ul, .chat-prose ol {
-  padding-left: 18px;
-  margin: 4px 0;
+  padding-left: 20px;
+  margin: 6px 0;
 }
 
 .chat-prose li {
-  margin: 2px 0;
-  font-size: 13px;
+  margin: 4px 0;
+  font-size: 14px;
 }
 
 /* Document cards in chat */

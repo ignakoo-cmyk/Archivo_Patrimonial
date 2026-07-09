@@ -181,12 +181,27 @@ class NLPExtractorAdapter:
         """
         # --- Estrategia 1: matching exacto contra vocabulario del archivo ---
         for creator_norm, creator_original in self._creators_normalizados.items():
-            # Verificar si el nombre normalizado aparece en la consulta
+            # Verificar si el nombre normalizado aparece completo
             if len(creator_norm) >= 5 and creator_norm in consulta_norm:
                 return creator_original
-            # Matching por apellido solo (primera palabra antes de la coma)
-            apellido = creator_norm.split(",")[0].strip()
-            if len(apellido) >= 4 and re.search(r"\b" + re.escape(apellido) + r"\b", consulta_norm):
+                
+            # Matching inverso o parcial: si están el primer nombre y el primer apellido
+            partes = [p.strip() for p in creator_norm.split(",")]
+            if len(partes) == 2:
+                apellidos = partes[0].split()
+                nombres = partes[1].split()
+                if apellidos and nombres:
+                    primer_apellido = apellidos[0]
+                    primer_nombre = nombres[0]
+                    # Solo para nombres y apellidos distintivos (>3 letras)
+                    if len(primer_apellido) > 3 and len(primer_nombre) > 3:
+                        if (re.search(r"\b" + re.escape(primer_apellido) + r"\b", consulta_norm) and
+                            re.search(r"\b" + re.escape(primer_nombre) + r"\b", consulta_norm)):
+                            return creator_original
+
+            # Matching por primer apellido solo (como fallback para apellidos muy raros)
+            primer_apellido_solo = creator_norm.split(",")[0].strip().split()[0] if creator_norm.split(",")[0].strip().split() else ""
+            if len(primer_apellido_solo) >= 5 and re.search(r"\b" + re.escape(primer_apellido_solo) + r"\b", consulta_norm):
                 return creator_original
 
         # --- Estrategia 2: patrón "Apellido, Nombre" directamente en el texto ---
