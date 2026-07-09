@@ -124,7 +124,6 @@ export default function ArchivePage() {
     setMessages((prev) => [...prev, { id: loadingId, role: "assistant", content: "", isLoading: true }]);
 
     try {
-      // Intentar obtener URL de variable de entorno o usar localhost:8059 por defecto
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8059`;
       console.log("Conectando a API en:", apiUrl);
 
@@ -134,9 +133,27 @@ export default function ArchivePage() {
         body: JSON.stringify({ message: query }),
       });
 
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-      
       const data = await res.json();
+
+      if (!res.ok) {
+        // Leer el JSON de diagnóstico devuelto por el backend refactorizado
+        const errorType = data?.error_type || "UNKNOWN";
+        const cause = data?.cause || "";
+        console.error(`[${errorType}] Error del backend:`, cause, "\n--- Stack ---\n", data?.stack_trace);
+
+        const friendlyMessages: Record<string, string> = {
+          LLM_UNAVAILABLE: "El modelo de IA está saturado en este momento. Espera unos segundos e intenta de nuevo.",
+          LLM_RATE_LIMIT: "Se ha agotado la cuota de la API. Intenta en unos minutos.",
+          LLM_MODEL_NOT_FOUND: "Error de configuración: el modelo de IA no está disponible.",
+          EXTERNAL_SERVICE_UNREACHABLE: "No se pudo conectar con la base de datos de búsqueda. Verifica que los servicios estén activos.",
+          EXTERNAL_SERVICE_TIMEOUT: "El servicio tardó demasiado en responder. Intenta de nuevo.",
+          SESSION_STORE_ERROR: "Error al recuperar tu sesión. Recarga la página e intenta de nuevo.",
+          ORCHESTRATOR_RUNTIME_ERROR: "Error interno del servidor al procesar tu mensaje.",
+        };
+
+        throw new Error(friendlyMessages[errorType] || `Error del servidor (${res.status}).`);
+      }
+
       console.log("Respuesta recibida:", data);
 
       setMessages((prev) =>
@@ -147,8 +164,8 @@ export default function ArchivePage() {
                 role: "assistant", 
                 content: data.response || "No recibí una respuesta clara del asistente.",
                 documents: data.documents,
-                rich_cards: data.rich_cards, // Soporte para la nueva arquitectura
-                quick_replies: data.quick_replies // Soporte para la nueva arquitectura
+                rich_cards: data.rich_cards,
+                quick_replies: data.quick_replies
               }
             : msg
         )
@@ -157,8 +174,8 @@ export default function ArchivePage() {
       console.log("Error en la búsqueda:", error);
       const isNetworkError = error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError");
       const errorMessage = isNetworkError 
-        ? "No pudimos conectar con el servidor. Verifica tu conexión a internet o asegúrate de que el API esté disponible."
-        : "Ocurrió un error en el servidor (HTTP 500) al procesar tu solicitud. Por favor, intenta de nuevo.";
+        ? "No pudimos conectar con el servidor. Verifica que el backend (Docker) esté corriendo."
+        : (error.message || "Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo.");
         
       setMessages((prev) =>
         prev.map((msg) =>
