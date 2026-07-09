@@ -78,7 +78,87 @@ class _EntradaJsonRaw(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Adaptador concreto
+# Funciones privadas de transformación Dublin Core (módulo-nivel)
+# Cada función tiene una responsabilidad única → CC ≤ 3 (grado A/B)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extraer_creator(dc_creator: list) -> tuple[str | None, set[str]]:
+    """
+    Extrae el creator principal y el vocabulario completo de dc:creator.
+    Retorna (creator_str, vocabulario_set).
+    Acepta tanto lista de dicts como lista de strings planos.
+    """
+    if not dc_creator:
+        return None, set()
+
+    vocabulario: set[str] = set()
+
+    def _str_creator(item) -> str:
+        if isinstance(item, dict):
+            return (item.get("authorized_form_of_name") or item.get("name", "")).strip()
+        return str(item).strip()
+
+    primer_str = _str_creator(dc_creator[0]) or None
+
+    for c in dc_creator:
+        c_str = _str_creator(c)
+        if c_str:
+            vocabulario.add(c_str)
+
+    return primer_str, vocabulario
+
+
+def _extraer_materias(dc_subject: list) -> str | None:
+    """
+    Convierte dc:subject a string separado por ' | '.
+    Acepta tanto lista de dicts como lista de strings planos.
+    """
+    if not dc_subject:
+        return None
+
+    if isinstance(dc_subject[0], dict):
+        partes = [
+            s.get("name", "") or s.get("authorized_form_of_name", "")
+            for s in dc_subject if s
+        ]
+    else:
+        partes = [str(s) for s in dc_subject if s]
+
+    return " | ".join(p.strip() for p in partes if p.strip()) or None
+
+
+def _extraer_lugar(dc_coverage: list) -> str | None:
+    """
+    Extrae la primera cobertura geográfica de dc:coverage.
+    Acepta tanto dict como string plano.
+    """
+    if not dc_coverage:
+        return None
+
+    primer = dc_coverage[0]
+    if isinstance(primer, dict):
+        return (primer.get("name") or primer.get("authorized_form_of_name", "")).strip() or None
+    return str(primer).strip() or None
+
+
+def _extraer_categorias(categories: list) -> str | None:
+    """
+    Convierte el árbol de categorías archivísticas a string para búsqueda de texto.
+    Acepta tanto lista de dicts como lista de strings planos.
+    """
+    if not categories:
+        return None
+
+    if isinstance(categories[0], dict):
+        partes = [c.get("name", "") for c in categories if c.get("name")]
+    else:
+        partes = [str(c) for c in categories if c]
+
+    return " ".join(p.strip() for p in partes if p.strip()) or None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Método de mapeo refactorizado (CC = 1, grado A)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StaticJsonRepositoryAdapter(AtoMRepositoryPort):
@@ -192,63 +272,16 @@ class StaticJsonRepositoryAdapter(AtoMRepositoryPort):
     ) -> Optional[DocumentoPatrimonial]:
         """
         Traduce una _EntradaJsonRaw (ya validada por Pydantic) al tipo de
-        dominio DocumentoPatrimonial. Retorna None si falla la invariante del dominio.
+        dominio DocumentoPatrimonial.
+
+        Refactorización P3: cada campo Dublin Core se delega a una función
+        privada del módulo con CC ≤ 3. Esta función queda en CC = 1 (grado A).
+        Retorna None si falla la invariante del dominio.
         """
         id_doc = str(entrada.id) if entrada.id is not None else (entrada.slug or str(idx))
 
-        # ── dc:creator → actor principal del documento ────────────────────────
-        creator_str: Optional[str] = None
-        if entrada.dc_creator:
-            primer = entrada.dc_creator[0]
-            if isinstance(primer, dict):
-                creator_str = (
-                    primer.get("authorized_form_of_name") or primer.get("name", "")
-                ) or None
-            else:
-                creator_str = str(primer).strip() or None
-            # Registrar todo el vocabulario de creators
-            for c in entrada.dc_creator:
-                c_str = (
-                    (c.get("authorized_form_of_name") or c.get("name", ""))
-                    if isinstance(c, dict)
-                    else str(c).strip()
-                )
-                if c_str:
-                    self._vocabulario_creators.add(c_str)
-
-        # ── dc:subject → materias/descriptores temáticos ──────────────────────
-        if entrada.dc_subject and isinstance(entrada.dc_subject[0], dict):
-            materias_str: Optional[str] = " | ".join(
-                s.get("name", "") or s.get("authorized_form_of_name", "")
-                for s in entrada.dc_subject
-                if s
-            ) or None
-        else:
-            materias_str = (
-                " | ".join(str(s) for s in entrada.dc_subject if s) or None
-            )
-
-        # ── dc:coverage → cobertura geográfica ───────────────────────────────
-        lugar_str: Optional[str] = None
-        if entrada.dc_coverage:
-            primer_cov = entrada.dc_coverage[0]
-            if isinstance(primer_cov, dict):
-                lugar_str = (
-                    primer_cov.get("name") or primer_cov.get("authorized_form_of_name")
-                )
-            else:
-                lugar_str = str(primer_cov).strip() or None
-
-        # ── categories → árbol de clasificación ──────────────────────────────
-        if entrada.categories and isinstance(entrada.categories[0], dict):
-            categorias_str: Optional[str] = (
-                " ".join(c.get("name", "") for c in entrada.categories if c.get("name"))
-                or None
-            )
-        else:
-            categorias_str = (
-                " ".join(str(c) for c in entrada.categories if c) or None
-            )
+        creator_str, vocab = _extraer_creator(entrada.dc_creator)
+        self._vocabulario_creators |= vocab
 
         try:
             return DocumentoPatrimonial(
@@ -258,9 +291,9 @@ class StaticJsonRepositoryAdapter(AtoMRepositoryPort):
                 url_catalogo=entrada.href or "",
                 anio=entrada.year or entrada.date,
                 creator=creator_str,
-                materias=materias_str,
-                lugar=lugar_str,
-                categorias=categorias_str,
+                materias=_extraer_materias(entrada.dc_subject),
+                lugar=_extraer_lugar(entrada.dc_coverage),
+                categorias=_extraer_categorias(entrada.categories),
             )
         except ValueError:
             # Falla de invariante del dominio (id o título vacíos) — omitir

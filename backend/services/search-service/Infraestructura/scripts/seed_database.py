@@ -1,5 +1,5 @@
-﻿"""
-Script de Inicializacion y Migracion de Datos — seed_database.py
+"""
+Script de Inicializacion y Migracion de Datos - seed_database.py
 =================================================================
 Estrategia de Semillero (Seed): lee los archivos JSON del catalogo
 patrimonial UAH y los inserta en PostgreSQL como fuente de verdad

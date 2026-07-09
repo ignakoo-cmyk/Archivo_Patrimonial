@@ -8,14 +8,20 @@ REGLAS DE ORO de este controlador:
   1. NO contiene lógica de negocio.
   2. NO define modelos de datos (los DTOs viven en Aplicacion/dtos/).
   3. Su única responsabilidad es:
-     a. Deserializar la petición HTTP (query params → Objeto de Valor Consulta).
+     a. Deserializar la petición HTTP (query params o body JSON → Objeto de Valor Consulta).
      b. Llamar al caso de uso.
      c. Serializar la respuesta (ResultadoFusionado → DTO JSON).
      d. Traducir errores del dominio a códigos HTTP apropiados.
+
+Endpoints expuestos:
+  - GET  /api/v1/search/query?q=...    → búsqueda clásica con query params
+  - POST /api/v1/search                → búsqueda moderna con body JSON {"query": "..."}
+    (recomendado para Locust, k6 y clientes REST)
 """
 
 from __future__ import annotations
 
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from Aplicacion.puertos.entrada import BuscarContenidoUseCase
@@ -30,6 +36,25 @@ from Dominio.objetos_de_valor.busqueda import Consulta, RespuestaBusquedaDominio
 router = APIRouter(prefix="/api/v1/search", tags=["Búsqueda Híbrida"])
 
 
+# ─────────────────────────────────────────────────────────────
+# DTO de entrada para el endpoint POST (body JSON)
+# ─────────────────────────────────────────────────────────────
+
+class BusquedaRequestDTO(BaseModel):
+    """
+    DTO de entrada para la búsqueda via POST con body JSON.
+    Compatible con clientes REST modernos y herramientas de prueba de carga (Locust, k6).
+    """
+    query: str = Field(..., min_length=2, description="Consulta en lenguaje natural")
+    limite: int = Field(5, ge=1, le=20, description="Número máximo de resultados")
+    anio: str | None = Field(None, description="Filtro opcional por año")
+    categoria: str | None = Field(None, description="Filtro opcional por categoría")
+    materia: str | None = Field(None, description="Filtro opcional por materia")
+
+
+# ─────────────────────────────────────────────────────────────
+# Funciones de dependencia de FastAPI
+# ─────────────────────────────────────────────────────────────
 
 def _obtener_caso_de_uso(request: Request) -> BuscarContenidoUseCase:
     """
@@ -48,40 +73,23 @@ def _obtener_extractor_nlp(request: Request):
     return getattr(request.app.state, "nlp_extractor", None)
 
 
-@router.get(
-    "/query",
-    response_model=BusquedaRespuestaDTO,
-    summary="Búsqueda híbrida de documentos patrimoniales",
-    description=(
-        "Ejecuta una búsqueda híbrida (RRF sobre ChromaDB + TF-IDF + Coincidencia Exacta) "
-        "sobre el Archivo Patrimonial UAH. Retorna documentos ordenados por relevancia compuesta."
-    ),
-)
-async def buscar(
-    q: str = Query(
-        ...,
-        min_length=2,
-        description="Consulta en lenguaje natural (mínimo 2 caracteres)",
-    ),
-    limite: int = Query(
-        5,
-        ge=1,
-        le=20,
-        description="Número máximo de resultados a retornar (entre 1 y 20)",
-    ),
-    anio: str = Query(None, description="Filtro opcional por año (ej. '1990')"),
-    categoria: str = Query(None, description="Filtro opcional por categoría archivística"),
-    materia: str = Query(None, description="Filtro opcional por materia o tema"),
-    caso_de_uso: BuscarContenidoUseCase = Depends(_obtener_caso_de_uso),
-    extractor_nlp = Depends(_obtener_extractor_nlp),
+# ─────────────────────────────────────────────────────────────
+# Función auxiliar interna para construir y ejecutar la consulta
+# ─────────────────────────────────────────────────────────────
+
+async def _ejecutar_busqueda(
+    texto: str,
+    limite: int,
+    anio: str | None,
+    categoria: str | None,
+    materia: str | None,
+    caso_de_uso: BuscarContenidoUseCase,
+    extractor_nlp,
 ) -> BusquedaRespuestaDTO:
     """
-    Endpoint principal de búsqueda híbrida.
-
-    Traduce los parámetros HTTP al Objeto de Valor Consulta del dominio,
-    ejecuta el caso de uso y serializa los resultados como DTO JSON.
+    Lógica compartida entre GET y POST: construye la Consulta de dominio,
+    ejecuta el caso de uso y serializa los resultados.
     """
-    # Construir diccionario de filtros HTTP explícitos
     filtros = {}
     if anio:
         filtros["anio"] = anio
@@ -90,34 +98,83 @@ async def buscar(
     if materia:
         filtros["materias"] = materia
 
-    # Extraer entidades NLP de la consulta en lenguaje natural
     filtro_nlp = None
     if extractor_nlp is not None:
-        filtro_nlp = extractor_nlp.extraer_filtros(q)
+        filtro_nlp = extractor_nlp.extraer_filtros(texto)
 
-    # Construir el Objeto de Valor — las invariantes del dominio se validan aquí
     try:
         consulta = Consulta(
-            texto=q,
+            texto=texto,
             limite=limite,
             filtros=filtros if filtros else None,
             filtro_nlp=filtro_nlp,
         )
     except ValueError as error_dominio:
-        # Las invariantes del dominio se traducen a errores HTTP 422 en el adaptador
         raise HTTPException(status_code=422, detail=str(error_dominio)) from error_dominio
 
-    # Ejecutar el caso de uso (lógica de negocio)
     respuesta_dominio: RespuestaBusquedaDominio = await caso_de_uso.ejecutar(consulta)
 
-    # Serializar resultados al DTO de respuesta
     return BusquedaRespuestaDTO(
         exito=True,
-        consulta=q,
+        consulta=texto,
         total=len(respuesta_dominio.resultados),
         total_corpus=respuesta_dominio.total_corpus,
         facetas=respuesta_dominio.facetas,
         resultados=[_mapear_a_dto(r) for r in respuesta_dominio.resultados],
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Endpoints HTTP
+# ─────────────────────────────────────────────────────────────
+
+@router.get(
+    "/query",
+    response_model=BusquedaRespuestaDTO,
+    summary="Búsqueda híbrida (GET con query params)",
+    description=(
+        "Ejecuta una búsqueda híbrida (RRF sobre ChromaDB + TF-IDF + Coincidencia Exacta) "
+        "sobre el Archivo Patrimonial UAH. Retorna documentos ordenados por relevancia compuesta."
+    ),
+)
+async def buscar_get(
+    q: str = Query(..., min_length=2, description="Consulta en lenguaje natural"),
+    limite: int = Query(5, ge=1, le=20, description="Número máximo de resultados"),
+    anio: str = Query(None, description="Filtro opcional por año (ej. '1990')"),
+    categoria: str = Query(None, description="Filtro opcional por categoría archivística"),
+    materia: str = Query(None, description="Filtro opcional por materia o tema"),
+    caso_de_uso: BuscarContenidoUseCase = Depends(_obtener_caso_de_uso),
+    extractor_nlp=Depends(_obtener_extractor_nlp),
+) -> BusquedaRespuestaDTO:
+    """Búsqueda híbrida con query params. Ej: GET /api/v1/search/query?q=decretos"""
+    return await _ejecutar_busqueda(q, limite, anio, categoria, materia, caso_de_uso, extractor_nlp)
+
+
+@router.post(
+    "",
+    response_model=BusquedaRespuestaDTO,
+    summary="Búsqueda híbrida (POST con body JSON)",
+    description=(
+        "Endpoint POST equivalente al GET /query pero usando body JSON. "
+        "Recomendado para clientes REST y pruebas de carga (Locust, k6, etc.). "
+        "Acepta: {\"query\": \"...\", \"limite\": 5, \"anio\": null, \"categoria\": null, \"materia\": null}"
+    ),
+)
+async def buscar_post(
+    body: BusquedaRequestDTO,
+    caso_de_uso: BuscarContenidoUseCase = Depends(_obtener_caso_de_uso),
+    extractor_nlp=Depends(_obtener_extractor_nlp),
+) -> BusquedaRespuestaDTO:
+    """
+    Búsqueda híbrida con body JSON.
+
+    Corrige el mismatch de contrato detectado en pruebas de carga con Locust:
+    el cliente enviaba POST con body JSON pero el servicio solo aceptaba GET con query params.
+    Ambos endpoints delegan al mismo caso de uso, garantizando comportamiento idéntico.
+    """
+    return await _ejecutar_busqueda(
+        body.query, body.limite, body.anio, body.categoria, body.materia,
+        caso_de_uso, extractor_nlp,
     )
 
 

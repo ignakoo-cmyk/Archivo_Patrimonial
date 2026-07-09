@@ -1,5 +1,5 @@
 # ============================================
-# UAH Archive Chatbot — Docker Compose
+# UAH Archive Chatbot — Docker Compose (Zero Trust Network)
 # ============================================
 
 services:
@@ -8,16 +8,18 @@ services:
     image: postgres:16-alpine
     container_name: uah_postgres
     restart: unless-stopped
-    ports:
-      - "5433:5432"
+    # ports:
+    #   - "5433:5432" # Puerto cerrado al host por seguridad
     environment:
       - POSTGRES_DB=uah_archivo
       - POSTGRES_USER=uah_user
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-uah_secret}
     volumes:
       - uah_postgres_data:/var/lib/postgresql/data
+    networks:
+      - uah-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U uah_user -d uah_archivo"]
+      test: [ "CMD-SHELL", "pg_isready -U uah_user -d uah_archivo" ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -26,12 +28,14 @@ services:
     image: redis:7-alpine
     container_name: uah_redis
     restart: unless-stopped
-    ports:
-      - "6380:6379"
+    # ports:
+    #   - "6380:6379" # Puerto cerrado al host por seguridad
     volumes:
       - uah_redis_data:/data
+    networks:
+      - uah-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -40,10 +44,12 @@ services:
     image: chromadb/chroma:latest
     container_name: uah_chroma
     restart: unless-stopped
-    ports:
-      - "8001:8000"
+    # ports:
+    #   - "8001:8000" # Puerto cerrado al host por seguridad
     volumes:
       - uah_chroma_data:/chroma/chroma
+    networks:
+      - uah-network
     environment:
       - ANONYMIZED_TELEMETRY=FALSE
 
@@ -55,7 +61,9 @@ services:
     container_name: uah_gateway
     restart: unless-stopped
     ports:
-      - "8059:8059"
+      - "8059:8059" # PUNTO DE ENTRADA ÚNICO (API Gateway Expueto)
+    networks:
+      - uah-network
     environment:
       - CHAT_SERVICE_URL=http://chat-service:3001
       - SEARCH_SERVICE_URL=http://search-service:3002
@@ -71,8 +79,10 @@ services:
       dockerfile: Dockerfile
     container_name: uah_chat_service
     restart: unless-stopped
-    ports:
-      - "3001:3001"
+    # ports:
+    #   - "3001:3001" # CERRADO: Solo el Gateway puede comunicarse con él
+    networks:
+      - uah-network
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - SEARCH_SERVICE_URL=http://search-service:3002
@@ -86,9 +96,11 @@ services:
       context: ./backend/services/search-service
       dockerfile: Dockerfile
     container_name: uah_search_service
-    restart: unless-stopped
-    ports:
-      - "3002:3002"
+    restart: on-failure:3
+    # ports:
+    #   - "3002:3002" # CERRADO: Solo el Gateway puede comunicarse con él
+    networks:
+      - uah-network
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - CHROMA_HOST=chromadb
@@ -97,6 +109,12 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://uah_user:${POSTGRES_PASSWORD:-uah_secret}@postgres:5432/uah_archivo
       - DATA_PATH=Infraestructura/datos/clean_with_metadata.json
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3002/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       redis:
         condition: service_healthy
@@ -111,8 +129,10 @@ services:
       dockerfile: Dockerfile
     container_name: uah_atom_integration
     restart: unless-stopped
-    ports:
-      - "3003:3003"
+    # ports:
+    #  - "3003:3003" # CERRADO: Solo el Gateway puede comunicarse con él
+    networks:
+      - uah-network
     environment:
       - ATOM_BASE_URL=${ATOM_BASE_URL:-http://host.docker.internal:8081}
       - REDIS_URL=redis://redis:6379/0
@@ -128,7 +148,9 @@ services:
     container_name: uah_frontend
     restart: unless-stopped
     ports:
-      - "3011:3000"
+      - "3011:3000" # APLICACIÓN DE CARA AL USUARIO (Expuesta)
+    networks:
+      - uah-network
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8059
 
@@ -136,3 +158,8 @@ volumes:
   uah_redis_data:
   uah_chroma_data:
   uah_postgres_data:
+
+# Definición explícita de la red privada aislada (Zero Trust)
+networks:
+  uah-network:
+    driver: bridge
