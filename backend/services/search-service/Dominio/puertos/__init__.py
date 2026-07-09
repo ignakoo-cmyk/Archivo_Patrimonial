@@ -2,7 +2,8 @@
 from Dominio.puertos.repositorio_salida import (
     AtoMRepositoryPort,
     LexicalSearchPort,
+    MetadataFilterPort,
     VectorStorePort,
 )
 
-__all__ = ["AtoMRepositoryPort", "LexicalSearchPort", "VectorStorePort"]
+__all__ = ["AtoMRepositoryPort", "LexicalSearchPort", "MetadataFilterPort", "VectorStorePort"]

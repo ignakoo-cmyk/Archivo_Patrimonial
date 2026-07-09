@@ -1,25 +1,46 @@
 """
-Capa de Aplicación — Caso de Uso
-====================================
-Orquesta la lógica de aplicación. No contiene reglas de negocio puras (esas viven
-en el Dominio), sino que coordina el flujo: recibe una intención, consulta los puertos,
-estructura la respuesta y la devuelve en un formato serializable para la capa de
-presentación (REST API, GraphQL, CLI, etc.).
+Capa de Aplicación — Caso de Uso: BuscadorDocumentosUseCase
+============================================================
+Implementa el Puerto de Entrada PuertoBuscadorDocumentos.
+
+Actúa como capa de coordinación entre el controlador HTTP y el dominio.
+Este es el lugar correcto para añadir capas transversales (cross-cutting concerns)
+sin contaminar la lógica pura del dominio:
+  - Registro de auditoría (logs de quién buscó qué y cuándo)
+  - Caché de resultados para consultas frecuentes (Redis)
+  - Métricas de latencia y telemetría (OpenTelemetry)
+
+REGLA: No contiene reglas de negocio puras; esas viven en el Dominio.
+Solo coordina el flujo: recibe una intención → consulta el puerto de salida
+→ estructura la respuesta en el formato esperado por la Presentación.
 """
+
+from __future__ import annotations
 
 from typing import Optional
 
+from Aplicacion.puertos.entrada import PuertoBuscadorDocumentos
 from Dominio.entidades.documento_patrimonial import DocumentoPatrimonial
 from Dominio.puertos.puerto_archivo_patrimonial import PuertoArchivoPatrimonial
 
 
-class BuscadorDocumentosUseCase:
+class BuscadorDocumentosUseCase(PuertoBuscadorDocumentos):
     """
-    Application Service que encapsula la lógica de búsqueda y presentación
-    de documentos patrimoniales. Recibe el puerto inyectado (Dependency Inversion).
+    Implementación concreta del Puerto de Entrada PuertoBuscadorDocumentos.
+
+    Recibe el PuertoArchivoPatrimonial inyectado (Dependency Inversion),
+    lo que permite que el controlador HTTP desconozca si la fuente de datos
+    es AtoM real, un JSON local, o un Mock de desarrollo.
     """
 
-    def __init__(self, repositorio: PuertoArchivoPatrimonial):
+    def __init__(self, repositorio: PuertoArchivoPatrimonial) -> None:
+        """
+        Args:
+            repositorio: Puerto de salida que abstrae el acceso a la fuente
+                         de datos del Archivo Patrimonial. Puede ser:
+                         - AtoMHttpAdapter (producción)
+                         - MockAtoMAdapter (desarrollo/tests)
+        """
         self._repositorio = repositorio
 
     async def ejecutar_busqueda(self, query: str, limite: int = 5) -> dict:
@@ -29,13 +50,9 @@ class BuscadorDocumentosUseCase:
         """
         documentos = await self._repositorio.buscar_por_lenguaje_natural(query, limite=limite)
 
-        # Construir Rich Cards para el frontend
         rich_cards = [self._documento_a_rich_card(doc) for doc in documentos]
-
-        # Generar sugerencias de búsqueda contextual
         quick_replies = self._generar_quick_replies(query, documentos)
 
-        # Mensaje textual principal
         if documentos:
             mensaje = (
                 f"Se encontraron {len(documentos)} registros relevantes "
@@ -51,7 +68,7 @@ class BuscadorDocumentosUseCase:
 
         return {
             "mensaje": mensaje,
-            "documentos": [doc.model_dump() for doc in documentos],
+            "documentos": [_documento_a_dict(doc) for doc in documentos],
             "rich_cards": rich_cards,
             "quick_replies": quick_replies,
             "total": len(documentos),
@@ -79,7 +96,7 @@ class BuscadorDocumentosUseCase:
 
         return {
             "mensaje": f"Documento encontrado: {documento.titulo}.",
-            "documento": documento.model_dump(),
+            "documento": _documento_a_dict(documento),
             "rich_card": card,
             "quick_replies": [
                 {"label": "Ver documentos similares", "value": f"similares a {documento.titulo}"},
@@ -87,18 +104,20 @@ class BuscadorDocumentosUseCase:
             ],
         }
 
+    # ── Métodos privados de ensamblado de presentación ──────────────────────
+
     @staticmethod
     def _documento_a_rich_card(doc: DocumentoPatrimonial) -> dict:
         """
         Transforma una entidad de dominio en una estructura de Rich Card
         consumible directamente por el componente de UI del frontend.
+
+        Esta lógica de presentación vive en Aplicación (no en Dominio)
+        porque depende del formato esperado por el frontend.
         """
-        # Seleccionar miniatura si existe
         miniatura_url: Optional[str] = None
-        for obj in doc.objetos_digitales:
-            if obj.tipo_mime.value.startswith("image/"):
-                miniatura_url = obj.url
-                break
+        if doc.miniatura:
+            miniatura_url = doc.miniatura.url
 
         return {
             "id": doc.id,
@@ -106,7 +125,7 @@ class BuscadorDocumentosUseCase:
             "codigo_referencia": doc.codigo_referencia,
             "anio": doc.anio,
             "url": doc.url_sistema,
-            "descripcion_corta": (doc.alcance_y_contenido[:180] + "...") if len(doc.alcance_y_contenido) > 180 else doc.alcance_y_contenido,
+            "descripcion_corta": doc.descripcion_corta,
             "materias": doc.materias[:4],
             "miniatura_url": miniatura_url,
             "relevancia": round(doc.relevancia, 2),
@@ -120,7 +139,6 @@ class BuscadorDocumentosUseCase:
         """
         replies = []
 
-        # Extraer materias frecuentes de los resultados para sugerir refinamiento
         todas_materias: list[str] = []
         for doc in documentos:
             todas_materias.extend(doc.materias)
@@ -128,10 +146,7 @@ class BuscadorDocumentosUseCase:
         materias_unicas = list(dict.fromkeys(todas_materias))[:3]
 
         for materia in materias_unicas:
-            replies.append({
-                "label": f"Explorar: {materia}",
-                "value": materia,
-            })
+            replies.append({"label": f"Explorar: {materia}", "value": materia})
 
         if not replies:
             replies = [
@@ -141,3 +156,27 @@ class BuscadorDocumentosUseCase:
             ]
 
         return replies
+
+
+def _documento_a_dict(doc: DocumentoPatrimonial) -> dict:
+    """
+    Serializa un DocumentoPatrimonial (@dataclass) a dict para la respuesta HTTP.
+    Reemplaza model_dump() de Pydantic ahora que el Dominio usa @dataclass puro.
+    Centraliza toda la lógica de serialización en la capa de Aplicación.
+    """
+    return {
+        "id": doc.id,
+        "codigo_referencia": doc.codigo_referencia,
+        "titulo": doc.titulo,
+        "anio": doc.anio,
+        "url_sistema": doc.url_sistema,
+        "alcance_y_contenido": doc.alcance_y_contenido,
+        "creadores": doc.creadores,
+        "materias": doc.materias,
+        "cobertura": doc.cobertura,
+        "objetos_digitales": [
+            {"url": o.url, "tipo_mime": o.tipo_mime.value, "etiqueta": o.etiqueta}
+            for o in doc.objetos_digitales
+        ],
+        "relevancia": doc.relevancia,
+    }

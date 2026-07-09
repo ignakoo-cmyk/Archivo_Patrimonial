@@ -24,7 +24,7 @@ SERVICES = {
 async def lifespan(app: FastAPI):
     print("🌐 API Gateway iniciando...")
     app.state.http_client = httpx.AsyncClient(timeout=30.0)
-    print("🚀 API Gateway listo en puerto 3000")
+    print("🚀 API Gateway listo en puerto 8059")
     yield
     await app.state.http_client.aclose()
     print("👋 API Gateway cerrado")
@@ -105,4 +105,4 @@ async def proxy_archive(request: Request, path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=3000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8059, reload=True)

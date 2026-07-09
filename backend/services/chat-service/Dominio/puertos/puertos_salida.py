@@ -6,8 +6,9 @@ del mundo exterior. Cada interfaz es una "promesa" que un adaptador
 de infraestructura debe cumplir.
 
 Puertos definidos:
-  - ModeloLenguajePort:   abstrae el LLM generativo (Gemini, OpenAI, etc.).
-  - ServicioBusquedaPort: abstrae la comunicación con el search-service.
+  - ModeloLenguajePort:      abstrae el LLM generativo (Gemini, OpenAI, etc.).
+  - ServicioBusquedaPort:    abstrae la comunicación con el search-service.
+  - SesionRepositorioPort:   abstrae el almacén de sesiones (en memoria, Redis, etc.).
 
 REGLA DE ORO: Sin imports de google.generativeai, httpx ni ningún framework.
 Solo Python estándar y tipos del dominio propio.
@@ -16,9 +17,11 @@ Solo Python estándar y tipos del dominio propio.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from Dominio.objetos_de_valor.chat import PromptContextualizado
 from Dominio.entidades.documento_patrimonial import DocumentoPatrimonial
+from Dominio.entidades.sesion_chat import SesionChat
 
 
 class ModeloLenguajePort(ABC):
@@ -73,7 +76,7 @@ class ServicioBusquedaPort(ABC):
     @abstractmethod
     async def buscar_documentos_relevantes(
         self, consulta: str, limite: int = 5
-    ) -> list[DocumentoPatrimonial]:
+    ) -> tuple[list[DocumentoPatrimonial], int, dict[str, list[str]]]:
         """
         Recupera los documentos más relevantes del archivo patrimonial
         para una consulta dada.
@@ -83,7 +86,64 @@ class ServicioBusquedaPort(ABC):
             limite:   Número máximo de documentos a recuperar.
 
         Returns:
-            Lista de DocumentoPatrimonial ordenados por relevancia.
-            Lista vacía si no hay resultados o el servicio no está disponible.
+            Tupla conteniendo:
+            1. Lista de DocumentoPatrimonial ordenados por relevancia.
+            2. Total de documentos en el corpus pre-filtrado.
+            3. Diccionario de facetas sugeridas.
+            Si el servicio falla, retorna ([], 0, {}).
+        """
+        ...
+
+
+class SesionRepositorioPort(ABC):
+    """
+    Puerto de Salida — Repositorio de Sesiones de Chat.
+
+    Abstrae el almacenamiento del estado de las conversaciones activas.
+    El Chat Context no sabe si las sesiones se guardan en memoria,
+    Redis, una base de datos SQL u otro mecanismo.
+
+    Implementado por:
+      - InMemorySesionRepositorio → dict en RAM (desarrollo / baja concurrencia).
+      - RedisSesionRepositorio    → Redis persistente (producción / alta concurrencia).
+
+    Contratos de ciclo de vida:
+      - Cada sesión tiene un ID único (conversation_id del frontend).
+      - Si la sesión no existe, obtener_o_crear() la inicializa automáticamente.
+    """
+
+    @abstractmethod
+    def obtener_o_crear(self, id_sesion: str) -> SesionChat:
+        """
+        Retorna la sesión existente o crea una nueva si no existe.
+
+        Args:
+            id_sesion: Identificador único de la conversación (del frontend).
+
+        Returns:
+            La SesionChat correspondiente al id_sesion.
+        """
+        ...
+
+    @abstractmethod
+    def guardar(self, sesion: SesionChat) -> None:
+        """
+        Persiste el estado actual de la sesión.
+
+        Args:
+            sesion: Entidad SesionChat con el historial actualizado.
+        """
+        ...
+
+    @abstractmethod
+    def obtener(self, id_sesion: str) -> Optional[SesionChat]:
+        """
+        Recupera una sesión existente sin crearla.
+
+        Args:
+            id_sesion: Identificador único de la conversación.
+
+        Returns:
+            La SesionChat si existe, None si no se encontró.
         """
         ...

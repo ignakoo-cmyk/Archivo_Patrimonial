@@ -8,11 +8,12 @@ scikit-learn ni ninguna librería concreta.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 from Dominio.entidades.documento_patrimonial import DocumentoPatrimonial
-from Dominio.objetos_de_valor.busqueda import Consulta, ResultadoBusqueda
-from Dominio.puertos.repositorio_salida import AtoMRepositoryPort, LexicalSearchPort, VectorStorePort
+from Dominio.objetos_de_valor.busqueda import Consulta, RespuestaBusquedaDominio, ResultadoBusqueda
+from Dominio.puertos.repositorio_salida import AtoMRepositoryPort, LexicalSearchPort, MetadataFilterPort, VectorStorePort
 
 # Constantes del algoritmo RRF — parte del conocimiento del dominio de búsqueda
 _RRF_K: int = 60
@@ -26,23 +27,75 @@ class GestorBusqueda:
     """
     Servicio de Dominio que orquesta la Búsqueda Híbrida.
 
-    Tres estrategias fusionadas con RRF (Reciprocal Rank Fusion):
-      1. Coincidencia Exacta — Python puro, sin librerías.
-      2. Semántica           — delega a VectorStorePort (ChromaDB).
-      3. Léxica              — delega a LexicalSearchPort (TF-IDF).
+    Cuatro estrategias fusionadas con RRF (Reciprocal Rank Fusion):
+      0. Pre-filtrado por Metadatos  — reduce el corpus ANTES del embedding (nuevo).
+      1. Coincidencia Exacta         — Python puro, sin librerías.
+      2. Semántica                  — delega a VectorStorePort (ChromaDB).
+      3. Léxica                     — delega a LexicalSearchPort (TF-IDF).
     """
     almacen_vectorial: VectorStorePort
     indice_lexico: LexicalSearchPort
     repositorio: AtoMRepositoryPort
+    motor_filtrado: MetadataFilterPort | None = None  # Puerto de pre-filtrado (opcional)
 
-    def buscar(self, consulta: Consulta) -> list[ResultadoBusqueda]:
-        """Ejecuta las tres estrategias y fusiona rankings con RRF."""
-        todos = self.repositorio.obtener_todos()
+    async def buscar(self, consulta: Consulta) -> RespuestaBusquedaDominio:
+        """Ejecuta pre-filtrado por metadatos y las tres estrategias híbridas fusionadas con RRF."""
+        todos = await self.repositorio.obtener_todos()
 
-        exactos  = self._buscar_exacto(consulta.texto_normalizado, todos)
-        semanticos = self.almacen_vectorial.buscar_similares(consulta.texto, n_resultados=15)
-        lexicos    = self.indice_lexico.buscar_por_terminos(consulta.texto, n_resultados=15)
+        # ── Paso 0: Pre-filtrado por metadatos NLP (reduce drásticamente el corpus) ──
+        corpus_busqueda = todos
+        if self.motor_filtrado and consulta.filtro_nlp and not consulta.filtro_nlp.esta_vacio:
+            corpus_busqueda = self.motor_filtrado.aplicar_filtros(
+                filtro=consulta.filtro_nlp,
+                corpus=todos,
+            )
+            
+        total_corpus = len(corpus_busqueda)
+        
+        # ── Paso 0.5: Extracción Dinámica de Facetas (Conversacional) ─────────
+        # Si el resultado es muy amplio y el usuario NO ha filtrado aún por materia,
+        # extraemos el Top 3 materias y Top 2 lugares para sugerencias.
+        facetas: dict[str, list[str]] = {"materias": [], "lugares": []}
+        
+        # Solo extraemos facetas si el pre-filtro redujo el corpus y quedaron > 20 docs.
+        # Omitimos extraer si la consulta ya contiene una materia (para evitar loops infinitos).
+        tiene_materia = consulta.filtro_nlp and consulta.filtro_nlp.materias
+        if total_corpus > 20 and total_corpus < len(todos) and not tiene_materia:
+            ctr_materias = Counter()
+            ctr_lugares = Counter()
+            
+            for doc in corpus_busqueda:
+                if doc.materias:
+                    # Dividimos por el separador " | " que usamos en el adaptador JSON
+                    for m in doc.materias.split(" | "):
+                        if m.strip():
+                            ctr_materias[m.strip()] += 1
+                if doc.lugar:
+                    ctr_lugares[doc.lugar.strip()] += 1
+                    
+            facetas["materias"] = [m for m, _ in ctr_materias.most_common(3)]
+            facetas["lugares"] = [l for l, _ in ctr_lugares.most_common(2)]
 
+        # ── Paso 1: Ejecutar estrategias sobre el corpus acotado ──────────────
+        exactos = self._buscar_exacto(consulta.texto_normalizado, corpus_busqueda)
+
+        # ── Búsqueda Semántica Híbrida Real ───────────────────────────────────
+        # Flujo: ChromaDB → IDs → Repositorio (PG/JSON) → DocumentoPatrimonial completo.
+        # Esto garantiza que los resultados semánticos contengan siempre la
+        # 'descripcion' completa y todos los metadatos Dublin Core, independientemente
+        # de lo que ChromaDB tenga indexado en sus propios metadatos.
+        ids_semanticos = self.almacen_vectorial.buscar_ids_similares(
+            consulta.texto, n_resultados=15, filtros=consulta.filtros
+        )
+        semanticos: list[DocumentoPatrimonial] = []
+        for id_sem in ids_semanticos:
+            doc_completo = await self.repositorio.obtener_por_id(id_sem)
+            if doc_completo:
+                semanticos.append(doc_completo)
+
+        lexicos = self.indice_lexico.buscar_por_terminos(consulta.texto, n_resultados=15)
+
+        # ── Paso 2: Fusión RRF ───────────────────────────────────────────────
         tabla_rrf: dict[str, float] = {}
         self._aplicar_rrf(exactos,    _PESO_EXACTO,    tabla_rrf)
         self._aplicar_rrf(semanticos, _PESO_SEMANTICO, tabla_rrf)
@@ -52,11 +105,15 @@ class GestorBusqueda:
 
         resultados: list[ResultadoBusqueda] = []
         for id_doc, puntuacion in ids_ordenados[: consulta.limite]:
-            doc = self.repositorio.obtener_por_id(id_doc)
+            doc = await self.repositorio.obtener_por_id(id_doc)
             if doc:
                 resultados.append(ResultadoBusqueda(documento=doc, puntuacion_rrf=round(puntuacion, 6)))
 
-        return resultados
+        return RespuestaBusquedaDominio(
+            resultados=resultados,
+            total_corpus=total_corpus,
+            facetas=facetas
+        )
 
     # ── Métodos privados de dominio ────────────────────────────────────────────
 

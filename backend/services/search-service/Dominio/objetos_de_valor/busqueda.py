@@ -14,8 +14,10 @@ Lenguaje Ubicuo de este contexto:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from Dominio.entidades.documento_patrimonial import DocumentoPatrimonial
+from Dominio.objetos_de_valor.filtro_metadatos import FiltroMetadatos
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,8 @@ class Consulta:
     """
     texto: str
     limite: int = 5
+    filtros: dict[str, str] = None              # filtros HTTP explícitos (anio, categoria, etc.)
+    filtro_nlp: Optional[FiltroMetadatos] = None # filtro semántico extraído por NLP
 
     def __post_init__(self) -> None:
         if not self.texto or not self.texto.strip():
@@ -54,3 +58,16 @@ class ResultadoBusqueda:
     def __post_init__(self) -> None:
         if self.puntuacion_rrf < 0:
             raise ValueError("La puntuación RRF no puede ser negativa.")
+
+
+@dataclass(frozen=True)
+class RespuestaBusquedaDominio:
+    """
+    Objeto de Valor que encapsula la respuesta de búsqueda completa.
+    Contiene la lista de resultados ordenados y la metadata agregada
+    sobre el corpus acotado para guiar búsquedas facetadas conversacionales.
+    """
+    resultados: list[ResultadoBusqueda]
+    total_corpus: int
+    facetas: dict[str, list[str]]
+

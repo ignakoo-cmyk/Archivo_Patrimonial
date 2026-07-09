@@ -13,7 +13,7 @@ sin contaminar la lógica pura del dominio:
 
 from __future__ import annotations
 
-from Dominio.objetos_de_valor.busqueda import Consulta, ResultadoBusqueda
+from Dominio.objetos_de_valor.busqueda import Consulta, RespuestaBusquedaDominio
 from Dominio.servicios.gestor_busqueda import GestorBusqueda
 from Aplicacion.puertos.entrada import BuscarContenidoUseCase
 
@@ -34,7 +34,7 @@ class BuscarContenidoService(BuscarContenidoUseCase):
         """
         self._gestor = gestor
 
-    def ejecutar(self, consulta: Consulta) -> list[ResultadoBusqueda]:
+    async def ejecutar(self, consulta: Consulta) -> RespuestaBusquedaDominio:
         """
         Delega la búsqueda al GestorBusqueda del dominio.
 
@@ -44,8 +44,8 @@ class BuscarContenidoService(BuscarContenidoUseCase):
             clave = f"busqueda:{consulta.texto_normalizado}:{consulta.limite}"
             if resultado := self._cache.get(clave):
                 return resultado
-            resultado = self._gestor.buscar(consulta)
+            resultado = await self._gestor.buscar(consulta)
             self._cache.set(clave, resultado, ttl=300)
             return resultado
         """
-        return self._gestor.buscar(consulta)
+        return await self._gestor.buscar(consulta)

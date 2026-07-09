@@ -9,7 +9,7 @@ Si en el futuro se migra a OpenAI GPT u otro LLM, SOLO este archivo cambia.
 
 from __future__ import annotations
 
-import google.generativeai as genai
+from google import genai
 
 from Dominio.objetos_de_valor.chat import PromptContextualizado
 from Dominio.puertos.puertos_salida import ModeloLenguajePort
@@ -32,27 +32,30 @@ class GeminiAdapter(ModeloLenguajePort):
         self._disponible = False
         if not api_key:
             print("⚠️ [GeminiAdapter] Sin GEMINI_API_KEY. Operando en modo fallback.")
-            self._modelo = None
+            self._client = None
             return
 
         try:
-            genai.configure(api_key=api_key)
-            self._modelo = genai.GenerativeModel(nombre_modelo)
+            self._client = genai.Client(api_key=api_key)
+            self._nombre_modelo = nombre_modelo
             self._disponible = True
             print(f"✅ [GeminiAdapter] Modelo '{nombre_modelo}' configurado correctamente.")
         except Exception as error:
             print(f"❌ [GeminiAdapter] Error al configurar Gemini: {error}")
-            self._modelo = None
+            self._client = None
 
     def esta_disponible(self) -> bool:
-        return self._disponible and self._modelo is not None
+        return self._disponible and getattr(self, '_client', None) is not None
 
     async def generar_respuesta(self, prompt: PromptContextualizado) -> str:
         """Envía el prompt a Gemini y retorna el texto generado."""
         if not self.esta_disponible():
             raise RuntimeError("[GeminiAdapter] El modelo no está disponible.")
         try:
-            response = await self._modelo.generate_content_async(prompt.texto_completo)
+            response = await self._client.aio.models.generate_content(
+                model=self._nombre_modelo,
+                contents=prompt.texto_completo
+            )
             return response.text
         except Exception as error:
             raise RuntimeError(f"[GeminiAdapter] Error de generación: {error}") from error

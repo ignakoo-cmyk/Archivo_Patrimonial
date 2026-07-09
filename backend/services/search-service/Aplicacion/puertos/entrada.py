@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from Dominio.objetos_de_valor.busqueda import Consulta, ResultadoBusqueda
+from Dominio.objetos_de_valor.busqueda import Consulta, RespuestaBusquedaDominio
 
 
 class BuscarContenidoUseCase(ABC):
@@ -27,7 +27,7 @@ class BuscarContenidoUseCase(ABC):
     """
 
     @abstractmethod
-    def ejecutar(self, consulta: Consulta) -> list[ResultadoBusqueda]:
+    async def ejecutar(self, consulta: Consulta) -> RespuestaBusquedaDominio:
         """
         Ejecuta el flujo completo de búsqueda híbrida.
 
@@ -35,6 +35,6 @@ class BuscarContenidoUseCase(ABC):
             consulta: Objeto de Valor inmutable con el texto y parámetros.
 
         Returns:
-            Lista de ResultadoBusqueda ordenados por puntuación RRF descendente.
+            Objeto RespuestaBusquedaDominio con resultados y facetas extraídas.
         """
         ...

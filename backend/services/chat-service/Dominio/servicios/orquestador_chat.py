@@ -7,13 +7,14 @@ Este es el corazón inteligente del sistema: NO es un simple pasamanos.
 Contiene reglas de negocio ricas que definen el comportamiento académico
 del asistente del Archivo Patrimonial UAH:
 
-  1. evaluar_intencion_usuario()    → decide si el mensaje requiere RAG.
+  1. evaluar_intencion_usuario()        → decide si el mensaje requiere RAG.
   2. validar_restricciones_academicas() → aplica anti-alucinación y rigor histórico.
-  3. ensamblar_respuesta_con_citas() → exige citas cuando se usan documentos.
+  3. ensamblar_respuesta_con_citas()    → exige citas cuando se usan documentos.
   4. construir_prompt_contextualizado() → ensambla el prompt con el contexto RAG.
 
 REGLA DE ORO: Opera exclusivamente con abstracciones (Puertos).
 No conoce google.generativeai, httpx ni ninguna librería de infraestructura.
+El System Prompt se inyecta como PromptTemplate, no está hardcodeado aquí.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from Dominio.objetos_de_valor.chat import (
     PromptContextualizado,
     RolMensaje,
 )
+from Dominio.objetos_de_valor.prompt_template import PromptTemplate, PROMPT_ACADEMICO_UAH
 from Dominio.entidades.sesion_chat import SesionChat
 from Dominio.puertos.puertos_salida import ModeloLenguajePort, ServicioBusquedaPort
 from Dominio.entidades.documento_patrimonial import DocumentoPatrimonial
@@ -43,11 +45,20 @@ _TERMINOS_SALUDO: frozenset[str] = frozenset({
 })
 
 _TERMINOS_ARCHIVO: frozenset[str] = frozenset({
-    "archivo", "documento", "fondo", "colección", "fotografía", "foto",
-    "historia", "histórico", "uah", "hurtado", "patrimonial", "patrimonio",
-    "jesuita", "derechos humanos", "memoria", "catalogación", "atom",
-    "expediente", "registro", "grabación", "audiovisual", "acervo",
-    "siglo", "década", "año", "período", "época", "universidad",
+    "archivo", "documento", "fondo", "colección", "coleccion", "fotografía",
+    "foto", "fotos", "fotografías", "historia", "histórico", "historico",
+    "uah", "hurtado", "patrimonial", "patrimonio", "jesuita", "jesuitas",
+    "derechos", "humanos", "memoria", "catalogación", "atom", "expediente",
+    "registro", "grabación", "audiovisual", "acervo", "siglo", "década",
+    "año", "período", "época", "universidad", "alberto", "institucional",
+    "serie", "subserie", "unidad", "legajo", "catalogar", "inventario",
+    "catálogo", "catalogo", "repositorio", "fondo documental", "acta",
+    "publicación", "publicacion", "revista", "carta", "correspondencia",
+    "manuscrito", "impreso", "mapa", "plano", "dibujo", "imagen",
+    "película", "video", "entrevista", "testimonio", "oral",
+    "informe", "resolución", "decreto", "contrato", "reglamento",
+    "santiago", "chile", "latinoamerica", "social", "educación", "iglesia",
+    "buscar", "encontrar", "mostrar", "listar", "qué", "cuáles",
 })
 
 _INDICADORES_FUERA_AMBITO: frozenset[str] = frozenset({
@@ -55,22 +66,6 @@ _INDICADORES_FUERA_AMBITO: frozenset[str] = frozenset({
     "política", "economía", "música", "película", "videojuego",
     "programar", "código", "python", "javascript",
 })
-
-# System Prompt institucional — conocimiento de negocio del dominio académico
-_SYSTEM_PROMPT_ACADEMICO = """Eres el Asistente Digital del Archivo Patrimonial de la \
-Universidad Alberto Hurtado (UAH).
-
-TU PERSONALIDAD:
-- Eres profesional, directo, amable y conciso. Hablas con un tono académico pero conversacional.
-- Actúas como un bibliotecario experto. NUNCA menciones que eres una Inteligencia Artificial, un modelo de lenguaje, o que estás leyendo un "contexto" o "documentos proporcionados". Simplemente entrega la información como si la supieras.
-
-REGLAS DE INTERACCIÓN:
-1. Si el usuario saluda, devuélvele el saludo de forma breve y ofrécele ayuda directamente (ej. "¡Hola! Bienvenido al Archivo Patrimonial UAH. ¿Qué documento o tema histórico buscas hoy?"). NO repitas el resumen de lo que hace el archivo a menos que te pregunten específicamente "¿Qué es este archivo?".
-2. Si la respuesta está en la información que se te entrega, respóndela de forma directa y natural. Al final, cita el título del documento y su URL si está disponible.
-3. Si la respuesta NO está en la información, di amablemente que no tienes esa información en el Archivo Patrimonial.
-4. NUNCA inventes información que no posees ni enlaces a páginas externas.
-5. Usa formato Markdown para estructurar tus respuestas. Sé conciso pero informativo.
-"""
 
 
 @dataclass
@@ -81,15 +76,23 @@ class ChatOrchestratorService:
     Orquesta el flujo completo de un mensaje: evalúa la intención,
     recupera contexto RAG si es necesario, construye el prompt y
     aplica validaciones de rigor académico antes de retornar la respuesta.
+
+    Dependencias inyectadas (todas son abstracciones — Ports):
+      - modelo_lenguaje:    ModeloLenguajePort (Gemini, OpenAI, etc.)
+      - servicio_busqueda:  ServicioBusquedaPort (HTTP, mock, etc.)
+      - prompt_template:    PromptTemplate (institucional, A/B test, etc.)
     """
     modelo_lenguaje: ModeloLenguajePort
     servicio_busqueda: ServicioBusquedaPort
+    prompt_template: PromptTemplate = PROMPT_ACADEMICO_UAH
 
     # ──────────────────────────────────────────────────────────
     # Método principal de orquestación
     # ──────────────────────────────────────────────────────────
 
-    async def procesar_mensaje(self, sesion: SesionChat, texto_usuario: str) -> tuple[str, list[DocumentoPatrimonial]]:
+    async def procesar_mensaje(
+        self, sesion: SesionChat, texto_usuario: str
+    ) -> tuple[str, list[DocumentoPatrimonial], list[dict[str, str]]]:
         """
         Flujo completo de procesamiento de un mensaje de usuario.
 
@@ -101,12 +104,14 @@ class ChatOrchestratorService:
         5. Llamar al LLM y obtener la respuesta cruda.
         6. Aplicar validaciones de restricciones académicas.
         7. Ensamblar la respuesta final con citas si corresponde.
-        8. Registrar la respuesta del asistente en la sesión.
+        8. Extraer sugerencias dinámicas.
+        9. Registrar la respuesta del asistente en la sesión.
 
         Returns:
         	Una tupla con:
         	  - Texto de respuesta final formateado en Markdown.
         	  - Lista de documentos recuperados de contexto.
+        	  - Lista de sugerencias (quick replies).
         """
         # Paso 1: Registrar en historial
         sesion.agregar_mensaje(RolMensaje.USUARIO, texto_usuario)
@@ -116,10 +121,41 @@ class ChatOrchestratorService:
 
         # Paso 3: Recuperar documentos RAG (solo si la intención lo requiere)
         documentos_contexto: list[DocumentoPatrimonial] = []
+        total_corpus = 0
+        facetas: dict[str, list[str]] = {}
+
         if intencion == IntencionUsuario.BUSQUEDA_ARCHIVO:
-            documentos_contexto = await self.servicio_busqueda.buscar_documentos_relevantes(
-                consulta=texto_usuario, limite=5
+            documentos_contexto, total_corpus, facetas = await self.servicio_busqueda.buscar_documentos_relevantes(
+                consulta=texto_usuario, limite=8
             )
+
+        # ── INTERCEPCIÓN BÚSQUEDA FACETADA CONVERSACIONAL ──
+        # Si el search-service devolvió facetas, significa que la búsqueda era
+        # demasiado amplia (>20 docs) y se activó el pre-filtrado por metadatos.
+        if facetas and (facetas.get("materias") or facetas.get("lugares")):
+            sugerencias = []
+
+            for materia in facetas.get("materias", []):
+                sugerencias.append({
+                    "label": materia.capitalize(),
+                    "value": f"{texto_usuario} {materia}"
+                })
+
+            for lugar in facetas.get("lugares", []):
+                sugerencias.append({
+                    "label": lugar.capitalize(),
+                    "value": f"{texto_usuario} {lugar}"
+                })
+
+            respuesta_intercep = (
+                f"He encontrado **{total_corpus}** documentos relacionados con tu búsqueda. "
+                f"Para ser más preciso y darte mejores resultados, ¿te interesa explorar "
+                f"alguna de estas categorías específicas?"
+            )
+
+            sesion.agregar_mensaje(RolMensaje.ASISTENTE, respuesta_intercep)
+            return respuesta_intercep, documentos_contexto, sugerencias[:5]
+        # ───────────────────────────────────────────────────
 
         # Paso 4: Construir prompt
         prompt = self.construir_prompt_contextualizado(texto_usuario, documentos_contexto)
@@ -135,15 +171,29 @@ class ChatOrchestratorService:
             respuesta_cruda, documentos_contexto
         )
 
-        # Paso 7: Ensamblar con citas obligatorias
+        # Paso 7: Extraer sugerencias dinámicas (antes de agregar las citas)
+        sugerencias = []
+        respuesta_sin_sug = respuesta_validada
+        if "SUGERENCIAS:" in respuesta_sin_sug:
+            partes = respuesta_sin_sug.split("SUGERENCIAS:")
+            respuesta_sin_sug = partes[0].strip()
+            bloque_sug = partes[1].strip()
+            for linea in bloque_sug.split('\n'):
+                if linea.strip().startswith('-'):
+                    sug_texto = linea.strip()[1:].strip().replace('*', '')
+                    if sug_texto:
+                        sugerencias.append({"label": sug_texto, "value": sug_texto})
+            sugerencias = sugerencias[:3]
+
+        # Paso 8: Ensamblar con citas obligatorias
         respuesta_final = self.ensamblar_respuesta_con_citas(
-            respuesta_validada, documentos_contexto
+            respuesta_sin_sug, documentos_contexto
         )
 
-        # Paso 8: Registrar respuesta en sesión
+        # Paso 9: Registrar respuesta en sesión
         sesion.agregar_mensaje(RolMensaje.ASISTENTE, respuesta_final)
 
-        return respuesta_final, documentos_contexto
+        return respuesta_final, documentos_contexto, sugerencias
 
     # ──────────────────────────────────────────────────────────
     # Reglas de Negocio Ricas del Dominio
@@ -168,21 +218,19 @@ class ChatOrchestratorService:
         texto_lower = texto.strip().lower()
         palabras = set(re.findall(r'\b\w+\b', texto_lower))
 
-        # Prioridad 1: Saludos y consultas de presentación
-        if palabras & _TERMINOS_SALUDO or len(texto_lower) < 15:
+        if palabras & _TERMINOS_SALUDO and not (palabras & _TERMINOS_ARCHIVO):
+            return IntencionUsuario.SALUDO_O_GENERAL
+        if len(texto_lower) < 8 and not (palabras & _TERMINOS_ARCHIVO):
             return IntencionUsuario.SALUDO_O_GENERAL
 
-        # Prioridad 2: Temas fuera del ámbito del archivo
         indicadores_fuera = palabras & _INDICADORES_FUERA_AMBITO
         indicadores_archivo = palabras & _TERMINOS_ARCHIVO
         if indicadores_fuera and not indicadores_archivo:
             return IntencionUsuario.FUERA_DE_AMBITO
 
-        # Prioridad 3: Consulta sobre el archivo patrimonial
         if indicadores_archivo:
             return IntencionUsuario.BUSQUEDA_ARCHIVO
 
-        # Por defecto: tratar como búsqueda (es mejor preguntar que omitir)
         return IntencionUsuario.BUSQUEDA_ARCHIVO
 
     def validar_restricciones_academicas(
@@ -196,8 +244,8 @@ class ChatOrchestratorService:
 
         1. Si el LLM genera una respuesta muy corta con documentos disponibles,
            añade una nota de contexto para guiar al usuario.
-        2. Detecta posibles alucinaciones: si la respuesta menciona documentos
-           con nombres que no están en el contexto provisto, agrega advertencia.
+        2. Detecta posibles alucinaciones: si la respuesta menciona URLs del
+           catálogo que no estaban en el contexto provisto, agrega advertencia.
         3. Normaliza el tono (actualmente placeholder para lógica más compleja).
 
         Args:
@@ -213,21 +261,20 @@ class ChatOrchestratorService:
                 "Por favor, intenta reformular tu pregunta."
             )
 
-        # Regla de completitud mínima: respuesta demasiado corta con contexto disponible
+        # Regla de completitud mínima
         if documentos_usados and len(respuesta.strip()) < 50:
             respuesta += (
                 "\n\n> *Nota: La búsqueda encontró documentos relevantes. "
                 "Considera reformular tu pregunta para obtener más detalles.*"
             )
 
-        # Regla anti-alucinación: verificar si el LLM inventó URLs no provistas
-        titulos_contexto = {doc.titulo.lower() for doc in documentos_usados}
+        # Regla anti-alucinación: verificar URLs inventadas
         urls_en_respuesta = re.findall(
             r'https?://archivopatrimonial\.uahurtado\.cl/\S+', respuesta
         )
         urls_contexto = {doc.url_catalogo for doc in documentos_usados if doc.tiene_url}
-
         urls_inventadas = [u for u in urls_en_respuesta if u not in urls_contexto]
+
         if urls_inventadas:
             respuesta += (
                 "\n\n> *Advertencia de rigor académico: Algunas URLs en esta "
@@ -259,12 +306,10 @@ class ChatOrchestratorService:
         if not documentos_usados:
             return respuesta
 
-        # Verificar si la respuesta ya incluye citas de los documentos
         documentos_con_url = [doc for doc in documentos_usados if doc.tiene_url]
         if not documentos_con_url:
             return respuesta
 
-        # Detectar si ya hay citas en la respuesta (URLs del catálogo)
         urls_ya_citadas = any(
             doc.url_catalogo in respuesta for doc in documentos_con_url
         )
@@ -272,7 +317,6 @@ class ChatOrchestratorService:
         if urls_ya_citadas:
             return respuesta
 
-        # Ensamblar sección de fuentes obligatoria
         lineas_citas = ["\n\n---\n**📚 Fuentes del Archivo Patrimonial UAH:**\n"]
         for i, doc in enumerate(documentos_con_url, start=1):
             anio_str = f" ({doc.anio})" if doc.anio else ""
@@ -288,9 +332,8 @@ class ChatOrchestratorService:
         """
         Construye el PromptContextualizado inyectando el contexto RAG.
 
-        Separa la lógica de construcción del prompt (dominio) del envío real
-        al LLM (adaptador). El prompt resultante sigue la estructura:
-          [System Prompt] + [Contexto RAG] + [Pregunta del usuario]
+        Delega el ensamblado del texto final al PromptTemplate inyectado,
+        manteniendo el dominio desacoplado del contenido específico del prompt.
 
         Args:
             consulta:    Texto original del usuario.
@@ -317,12 +360,9 @@ class ChatOrchestratorService:
                 "No se encontraron documentos relevantes en el archivo para esta consulta."
             )
 
-        texto_completo = (
-            f"{_SYSTEM_PROMPT_ACADEMICO}"
-            f"{bloque_contexto}"
-            f"\n\n═══ PREGUNTA DEL USUARIO ═══\n{consulta}\n\n"
-            "Responde de forma útil basándote en los documentos anteriores. "
-            "Si no hay documentos relevantes, dilo honestamente y sugiere términos alternativos."
+        texto_completo = self.prompt_template.construir_prompt_completo(
+            consulta=consulta,
+            bloque_contexto=bloque_contexto,
         )
 
         return PromptContextualizado(

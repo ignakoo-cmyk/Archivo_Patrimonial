@@ -2,14 +2,21 @@
 Adaptador de Entrada — Controlador HTTP del Chat (FastAPI)
 ===========================================================
 Traduce las peticiones HTTP al dominio del Chat Context.
-No contiene lógica de negocio: solo serializa/deserializa y delega al caso de uso.
+
+REGLAS DE ORO de este controlador:
+  1. No contiene lógica de negocio: solo serializa/deserializa y delega.
+  2. Gestiona las sesiones a través del SesionRepositorioPort (no directamente
+     con un dict), permitiendo cambiar el almacén (Redis, DB) sin modificar aquí.
+  3. Los errores del dominio se traducen a códigos HTTP apropiados.
 """
 
 from __future__ import annotations
 
+import traceback
+
 from fastapi import APIRouter, HTTPException, Request
 
-from Dominio.entidades.sesion_chat import SesionChat
+from Dominio.puertos.puertos_salida import SesionRepositorioPort
 from Aplicacion.dtos.chat_dtos import (
     DocumentoReferenciaDTO,
     MensajeEntradaDTO,
@@ -36,22 +43,24 @@ async def enviar_mensaje(
     Ejecuta el flujo completo: evaluación de intención → RAG → LLM → validación.
     """
     orquestador = request.app.state.orquestador
-    sesiones: dict[str, SesionChat] = request.app.state.sesiones
+    sesion_repo: SesionRepositorioPort = request.app.state.sesion_repositorio
 
-    # Recuperar o crear la sesión de chat
-    if cuerpo.conversation_id not in sesiones:
-        sesiones[cuerpo.conversation_id] = SesionChat(id=cuerpo.conversation_id)
-    sesion = sesiones[cuerpo.conversation_id]
+    # Recuperar o crear la sesión a través del puerto de repositorio
+    sesion = sesion_repo.obtener_o_crear(cuerpo.conversation_id)
 
     try:
-        respuesta, docs_recuperados = await orquestador.procesar_mensaje(sesion, cuerpo.message)
+        respuesta, docs_recuperados, sugerencias = await orquestador.procesar_mensaje(
+            sesion, cuerpo.message
+        )
+        # Persistir la sesión actualizada
+        sesion_repo.guardar(sesion)
     except Exception as error:
+        print(f"Error crítico en endpoint chat/message: {str(error)}\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error al procesar el mensaje: {error}"
+            detail=f"Error al procesar el mensaje: {str(error)}"
         ) from error
 
-    # Mapear los documentos recuperados al DTO de salida
     documentos_referencia = [
         DocumentoReferenciaDTO(
             title=doc.titulo,
@@ -68,5 +77,5 @@ async def enviar_mensaje(
         conversation_id=cuerpo.conversation_id,
         documents=documentos_referencia,
         rich_cards=[],
-        quick_replies=[]
+        quick_replies=sugerencias
     )

@@ -4,6 +4,24 @@
 
 services:
   # --- Infraestructura ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: uah_postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=uah_archivo
+      - POSTGRES_USER=uah_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-uah_secret}
+    volumes:
+      - uah_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uah_user -d uah_archivo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     container_name: uah_redis
@@ -37,7 +55,7 @@ services:
     container_name: uah_gateway
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "8059:8059"
     environment:
       - CHAT_SERVICE_URL=http://chat-service:3001
       - SEARCH_SERVICE_URL=http://search-service:3002
@@ -77,11 +95,15 @@ services:
       - CHROMA_PORT=8000
       - ATOM_SERVICE_URL=http://atom-integration:3003
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://uah_user:${POSTGRES_PASSWORD:-uah_secret}@postgres:5432/uah_archivo
+      - DATA_PATH=Infraestructura/datos/clean_with_metadata.json
     depends_on:
       redis:
         condition: service_healthy
       chromadb:
         condition: service_started
+      postgres:
+        condition: service_healthy
 
   atom-integration:
     build:
@@ -106,10 +128,11 @@ services:
     container_name: uah_frontend
     restart: unless-stopped
     ports:
-      - "8090:3000"
+      - "3011:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:3000
+      - NEXT_PUBLIC_API_URL=http://localhost:8059
 
 volumes:
   uah_redis_data:
   uah_chroma_data:
+  uah_postgres_data:

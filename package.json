@@ -1,0 +1,8 @@
+{
+  "name": "uah-archive-chatbot-root",
+  "version": "1.0.0",
+  "description": "Master package.json to manage the full stack development environment",
+  "scripts": {
+    "dev": "docker-compose up --build"
+  }
+}

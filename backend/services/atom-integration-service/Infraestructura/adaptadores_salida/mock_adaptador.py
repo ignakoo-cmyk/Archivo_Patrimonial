@@ -1,10 +1,18 @@
 """
-Adaptador Mock — Para Desarrollo sin AtoM
-=============================================
-Implementa PuertoArchivoPatrimonial con datos ficticios para permitir al
-equipo de frontend maquetar la UI interactiva (Rich Cards, Quick Replies)
-sin necesidad de credenciales ni conexión al sistema AtoM real.
+Adaptador Mock — Para Desarrollo y Tests sin AtoM
+===================================================
+Implementa PuertoArchivoPatrimonial con datos representativos del
+Archivo Patrimonial UAH para permitir al equipo de frontend maquetar
+la UI interactiva (Rich Cards, Quick Replies) sin necesidad de
+credenciales ni conexión al sistema AtoM real.
+
+Corpus de documentos ficticios pero representativos:
+  - Cubre los tipos documentales principales: texto, fotografía, audio.
+  - Incluye materias del tesauro real (Derechos Humanos, Fotografías, Iglesia).
+  - Las URLs siguen el patrón real del catálogo AtoM de la UAH.
 """
+
+from __future__ import annotations
 
 from typing import Optional
 
@@ -13,8 +21,10 @@ from Dominio.objetos_de_valor.objeto_digital import ObjetoDigital, TipoMIME
 from Dominio.puertos.puerto_archivo_patrimonial import PuertoArchivoPatrimonial
 
 
-# Corpus de documentos ficticios representativos del Archivo Patrimonial UAH
-_MOCK_DOCUMENTS = [
+# ── Corpus de documentos de desarrollo ────────────────────────────────────────
+# Construidos como instancias inmutables; la relevancia se asigna en la consulta.
+
+_MOCK_DOCUMENTS: list[DocumentoPatrimonial] = [
     DocumentoPatrimonial(
         id="mock-001",
         codigo_referencia="UAH-D-1027",
@@ -108,30 +118,63 @@ class MockAtoMAdapter(PuertoArchivoPatrimonial):
     Adaptador de desarrollo que retorna datos ficticios.
     Permite al equipo de frontend trabajar de forma autónoma con el contrato
     de datos completo mientras se gestiona el acceso a la API de AtoM.
+
+    Nota: Los documentos son @dataclass mutables. La relevancia se asigna
+    creando una nueva instancia con el campo actualizado para no mutar
+    los datos del corpus compartido.
     """
 
-    async def buscar_por_lenguaje_natural(self, query: str, limite: int = 5) -> list[DocumentoPatrimonial]:
+    async def buscar_por_lenguaje_natural(
+        self, query: str, limite: int = 5
+    ) -> list[DocumentoPatrimonial]:
         query_lower = query.lower()
-        resultados = []
+        resultados: list[DocumentoPatrimonial] = []
 
         for doc in _MOCK_DOCUMENTS:
-            texto_busqueda = f"{doc.titulo} {doc.alcance_y_contenido} {' '.join(doc.materias)}".lower()
+            texto_busqueda = (
+                f"{doc.titulo} {doc.alcance_y_contenido} {' '.join(doc.materias)}"
+            ).lower()
             if any(palabra in texto_busqueda for palabra in query_lower.split()):
-                doc_copia = doc.model_copy()
-                doc_copia.relevancia = 0.85
-                resultados.append(doc_copia)
+                copia = _clonar_con_relevancia(doc, 0.85)
+                resultados.append(copia)
 
         # Si no hay coincidencias, devolver todos para que el frontend siempre
         # tenga datos con los que trabajar durante el desarrollo
         if not resultados:
-            resultados = [d.model_copy() for d in _MOCK_DOCUMENTS[:limite]]
-            for r in resultados:
-                r.relevancia = 0.5
+            resultados = [
+                _clonar_con_relevancia(doc, 0.5)
+                for doc in _MOCK_DOCUMENTS[:limite]
+            ]
 
         return resultados[:limite]
 
-    async def obtener_documento_por_codigo(self, codigo: str) -> Optional[DocumentoPatrimonial]:
+    async def obtener_documento_por_codigo(
+        self, codigo: str
+    ) -> Optional[DocumentoPatrimonial]:
         for doc in _MOCK_DOCUMENTS:
             if doc.codigo_referencia == codigo or doc.id == codigo:
-                return doc.model_copy()
+                return _clonar_con_relevancia(doc, 1.0)
         return None
+
+
+def _clonar_con_relevancia(
+    doc: DocumentoPatrimonial, relevancia: float
+) -> DocumentoPatrimonial:
+    """
+    Crea una nueva instancia de DocumentoPatrimonial con la relevancia asignada.
+    Evita mutar las instancias del corpus compartido _MOCK_DOCUMENTS.
+    """
+    copia = DocumentoPatrimonial(
+        id=doc.id,
+        codigo_referencia=doc.codigo_referencia,
+        titulo=doc.titulo,
+        anio=doc.anio,
+        url_sistema=doc.url_sistema,
+        alcance_y_contenido=doc.alcance_y_contenido,
+        creadores=list(doc.creadores),
+        materias=list(doc.materias),
+        cobertura=list(doc.cobertura),
+        objetos_digitales=list(doc.objetos_digitales),
+        relevancia=relevancia,
+    )
+    return copia

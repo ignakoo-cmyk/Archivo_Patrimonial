@@ -30,7 +30,7 @@ class SearchServiceHttpAdapter(ServicioBusquedaPort):
 
     async def buscar_documentos_relevantes(
         self, consulta: str, limite: int = 5
-    ) -> list[DocumentoPatrimonial]:
+    ) -> tuple[list[DocumentoPatrimonial], int, dict[str, list[str]]]:
         """
         Llama al endpoint /api/v1/search/query del search-service y
         mapea la respuesta JSON al tipo de dominio DocumentoPatrimonial.
@@ -44,13 +44,18 @@ class SearchServiceHttpAdapter(ServicioBusquedaPort):
             datos = respuesta.json()
         except Exception as error:
             print(f"❌ [SearchServiceHttpAdapter] Error al consultar búsqueda: {error}")
-            return []
+            return [], 0, {}
 
-        return [
+        documentos = [
             self._mapear_resultado(r)
             for r in datos.get("resultados", [])
             if r.get("id") and r.get("titulo")
         ]
+        
+        total_corpus = datos.get("total_corpus", 0)
+        facetas = datos.get("facetas", {})
+        
+        return documentos, total_corpus, facetas
 
     @staticmethod
     def _mapear_resultado(raw: dict) -> DocumentoPatrimonial:
